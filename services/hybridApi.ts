@@ -191,71 +191,85 @@ export const updateMultipleReservations = async (updatedList: Reservation[]): Pr
 export const resetPlanningData = async (): Promise<void> => {
     console.log('[Reset] Début du reset des données...');
     
-    const isOnline = syncManager.getStatus();
-    console.log(`[Reset] Mode: ${isOnline ? 'EN LIGNE' : 'HORS LIGNE'}`);
-    
     // 1. Récupérer tous les IDs des réservations LOCALES avant de les effacer
     const localReservations = await localDb.reservations.toArray();
     const localIds = localReservations.map(r => r.id);
-    console.log(`[Reset] ${localIds.length} réservations locales trouvées`);
+    console.log(`[Reset] ${localIds.length} réservations locales trouvées:`, localIds);
     
-    // 2. Nettoyer les anciennes opérations de sync (sauf les delete qu'on va ajouter)
+    // 2. Vérifier VRAIMENT si on peut joindre Supabase (pas juste le status en cache)
+    let canReachSupabase = false;
+    let remoteIds: string[] = [];
+    
+    try {
+        const { supabase } = await import('./supabase');
+        const { data, error } = await supabase.from('reservations').select('id');
+        
+        if (!error) {
+            canReachSupabase = true;
+            remoteIds = data?.map(r => r.id) || [];
+            console.log(`[Reset] ✓ Supabase accessible - ${remoteIds.length} réservations distantes`);
+        } else {
+            console.log('[Reset] ✗ Supabase inaccessible:', error.message);
+        }
+    } catch (err) {
+        console.log('[Reset] ✗ Impossible de joindre Supabase:', err);
+    }
+    
+    // 3. Combiner les IDs locaux et distants (sans doublons)
+    const allIds = [...new Set([...localIds, ...remoteIds])];
+    console.log(`[Reset] Total: ${allIds.length} réservations à supprimer`);
+    
+    // 4. Nettoyer la queue de sync existante
     await localDb.syncQueue.clear();
     
-    if (isOnline) {
-        // === MODE EN LIGNE ===
-        // Supprimer directement dans Supabase
-        try {
-            const { supabase } = await import('./supabase');
-            
-            // Récupérer aussi les IDs depuis Supabase (peut avoir des données non synchronisées)
-            const { data: remoteReservations } = await supabase
-                .from('reservations')
-                .select('id');
-            
-            const remoteIds = remoteReservations?.map(r => r.id) || [];
-            
-            // Combiner les IDs locaux et distants (sans doublons)
-            const allIds = [...new Set([...localIds, ...remoteIds])];
-            console.log(`[Reset] ${allIds.length} réservations à supprimer au total`);
-            
-            if (allIds.length > 0) {
-                // Supprimer chaque réservation dans Supabase
-                let deletedCount = 0;
-                for (const id of allIds) {
-                    const { error } = await supabase
-                        .from('reservations')
-                        .delete()
-                        .eq('id', id);
-                    
-                    if (!error) deletedCount++;
-                }
-                console.log(`[Reset] ✓ ${deletedCount}/${allIds.length} supprimées de Supabase`);
-            }
-        } catch (err) {
-            console.error('[Reset] Erreur Supabase:', err);
-        }
-    } else {
-        // === MODE HORS LIGNE ===
-        // Ajouter des opérations de suppression dans la queue pour synchronisation ultérieure
-        console.log('[Reset] Mode hors ligne - Mise en queue des suppressions...');
+    if (canReachSupabase && allIds.length > 0) {
+        // === MODE EN LIGNE - Suppression directe ===
+        console.log('[Reset] Mode EN LIGNE - Suppression directe dans Supabase...');
         
-        for (const id of localIds) {
-            await syncManager.queueOperation({
+        const { supabase } = await import('./supabase');
+        let deletedCount = 0;
+        
+        for (const id of allIds) {
+            const { error } = await supabase
+                .from('reservations')
+                .delete()
+                .eq('id', id);
+            
+            if (!error) {
+                deletedCount++;
+            } else {
+                console.error(`[Reset] Erreur suppression ${id}:`, error.message);
+            }
+        }
+        
+        console.log(`[Reset] ✓ ${deletedCount}/${allIds.length} supprimées de Supabase`);
+        
+    } else if (allIds.length > 0) {
+        // === MODE HORS LIGNE - Mise en queue ===
+        console.log('[Reset] Mode HORS LIGNE - Mise en queue des suppressions...');
+        
+        // IMPORTANT: Ajouter chaque suppression à la queue
+        for (const id of allIds) {
+            await localDb.syncQueue.add({
                 action: 'delete',
                 table: 'reservations',
                 entityId: id,
-                data: null
+                data: null,
+                timestamp: Date.now(),
+                retryCount: 0
             });
+            console.log(`[Reset] Queued delete for: ${id}`);
         }
         
-        // Marquer qu'un reset a été fait hors ligne (pour éviter le pull au retour)
+        // Marquer qu'un reset a été fait hors ligne
         await localDb.settings.put({ key: 'pendingReset', value: true });
         
-        console.log(`[Reset] ${localIds.length} suppressions mises en queue`);
+        // Vérifier que les opérations sont bien dans la queue
+        const queueCount = await localDb.syncQueue.count();
+        console.log(`[Reset] ✓ ${queueCount} opérations dans la queue de sync`);
     }
     
-    // 3. Effacer les données locales
+    // 5. Effacer les données locales
     await localDb.reservations.clear();
     console.log('[Reset] ✓ Données locales effacées');
 };
