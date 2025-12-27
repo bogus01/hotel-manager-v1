@@ -18,6 +18,7 @@ import {
     ServiceItem, CurrencySettings, PlanningSettings, BoardConfiguration,
     ModuleThemesMap, BoardType
 } from '../types';
+import { formatDateToDB } from '../utils/date';
 
 // ============================================
 // TAXES
@@ -315,8 +316,8 @@ export const updateReservationDate = async (id: string, checkIn: Date, checkOut:
     const { error } = await supabase
         .from('reservations')
         .update({
-            check_in: checkIn.toISOString().split('T')[0],
-            check_out: checkOut.toISOString().split('T')[0],
+            check_in: formatDateToDB(checkIn),
+            check_out: formatDateToDB(checkOut),
             room_id: roomId
         })
         .eq('id', id);

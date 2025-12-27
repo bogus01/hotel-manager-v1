@@ -1,4 +1,5 @@
 import { Room, RoomStatus, Reservation, ReservationStatus, Client, Tax, PaymentMethod, ServiceCatalogItem, RoomCategory, User, Payment, ServiceItem, CurrencySettings, PlanningSettings, BoardConfiguration, ModuleThemesMap, PricingModel } from '../types';
+import { formatDateToDB } from '../utils/date';
 
 // ============================================
 // ROOM CATEGORIES
@@ -108,8 +109,8 @@ export const mapReservationToDB = (res: Partial<Reservation>) => ({
     client_id: res.clientId,
     client_name: res.clientName,
     occupant_name: res.occupantName,
-    check_in: res.checkIn instanceof Date ? res.checkIn.toISOString().split('T')[0] : res.checkIn,
-    check_out: res.checkOut instanceof Date ? res.checkOut.toISOString().split('T')[0] : res.checkOut,
+    check_in: res.checkIn instanceof Date ? formatDateToDB(res.checkIn) : res.checkIn,
+    check_out: res.checkOut instanceof Date ? formatDateToDB(res.checkOut) : res.checkOut,
     status: res.status,
     source: res.source,
     board_type: res.boardType,
