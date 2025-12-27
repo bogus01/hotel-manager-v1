@@ -189,8 +189,41 @@ export const updateMultipleReservations = async (updatedList: Reservation[]): Pr
 };
 
 export const resetPlanningData = async (): Promise<void> => {
+    // Récupérer tous les IDs des réservations AVANT de les supprimer
+    const allReservations = await localDb.reservations.toArray();
+    const reservationIds = allReservations.map(r => r.id);
+    
+    // Effacer localement
     await localDb.reservations.clear();
-    await syncManager.queueOperation({ action: 'delete', table: 'reservations', entityId: '*', data: null });
+    
+    // Supprimer aussi les paiements et services liés aux réservations
+    await localDb.payments.clear();
+    
+    // Ajouter une opération de suppression pour chaque réservation
+    for (const id of reservationIds) {
+        await syncManager.queueOperation({ action: 'delete', table: 'reservations', entityId: id, data: null });
+    }
+    
+    // Si en ligne, supprimer directement dans Supabase pour être sûr
+    if (syncManager.getStatus()) {
+        try {
+            const { supabase } = await import('./supabase');
+            // Suppression directe de toutes les réservations dans Supabase
+            await supabase.from('reservation_payments').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+            await supabase.from('reservation_services').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+            await supabase.from('reservations').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+            
+            // Vider la queue de sync pour les réservations
+            const pendingOps = await localDb.syncQueue.where('table').equals('reservations').toArray();
+            for (const op of pendingOps) {
+                await localDb.syncQueue.delete(op.id!);
+            }
+            
+            console.log('[Reset] Toutes les réservations supprimées de Supabase');
+        } catch (err) {
+            console.error('[Reset] Erreur lors de la suppression dans Supabase:', err);
+        }
+    }
 };
 
 // SERVICES ET PAIEMENTS

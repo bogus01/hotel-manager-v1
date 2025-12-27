@@ -16,6 +16,9 @@ class SyncManager {
         window.addEventListener('online', () => this.checkConnection());
         window.addEventListener('offline', () => this.setOnlineStatus(false));
         
+        // Nettoyage initial des opérations invalides
+        this.cleanInvalidOperations();
+        
         // Vérification initiale
         this.checkConnection();
         
@@ -269,6 +272,39 @@ class SyncManager {
             'users': 'users'
         };
         return mapping[remoteTable] || remoteTable;
+    }
+
+    // Nettoyer les opérations invalides de la queue (comme entityId: '*')
+    public async cleanInvalidOperations(): Promise<number> {
+        const ops = await localDb.syncQueue.toArray();
+        let cleanedCount = 0;
+        
+        for (const op of ops) {
+            // Supprimer les opérations avec des IDs invalides
+            if (!op.entityId || op.entityId === '*' || op.entityId === '') {
+                await localDb.syncQueue.delete(op.id!);
+                cleanedCount++;
+                console.log(`[SyncManager] Removed invalid operation: ${op.action} on ${op.table} with entityId: ${op.entityId}`);
+            }
+        }
+        
+        if (cleanedCount > 0) {
+            console.log(`[SyncManager] Cleaned ${cleanedCount} invalid operations from queue`);
+        }
+        
+        return cleanedCount;
+    }
+
+    // Vider complètement la queue de sync
+    public async clearSyncQueue(): Promise<void> {
+        const count = await localDb.syncQueue.count();
+        await localDb.syncQueue.clear();
+        console.log(`[SyncManager] Cleared ${count} operations from sync queue`);
+    }
+
+    // Obtenir le nombre d'opérations en attente
+    public async getPendingCount(): Promise<number> {
+        return await localDb.syncQueue.count();
     }
 }
 
