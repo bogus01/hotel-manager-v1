@@ -189,40 +189,66 @@ export const updateMultipleReservations = async (updatedList: Reservation[]): Pr
 };
 
 export const resetPlanningData = async (): Promise<void> => {
-    // Récupérer tous les IDs des réservations AVANT de les supprimer
-    const allReservations = await localDb.reservations.toArray();
-    const reservationIds = allReservations.map(r => r.id);
+    console.log('[Reset] Début du reset des données...');
     
-    // Effacer localement
+    // Effacer localement d'abord
     await localDb.reservations.clear();
-    
-    // Supprimer aussi les paiements et services liés aux réservations
     await localDb.payments.clear();
+    await localDb.syncQueue.clear(); // Vider complètement la queue de sync
     
-    // Ajouter une opération de suppression pour chaque réservation
-    for (const id of reservationIds) {
-        await syncManager.queueOperation({ action: 'delete', table: 'reservations', entityId: id, data: null });
-    }
+    console.log('[Reset] Données locales effacées');
     
-    // Si en ligne, supprimer directement dans Supabase pour être sûr
-    if (syncManager.getStatus()) {
-        try {
-            const { supabase } = await import('./supabase');
-            // Suppression directe de toutes les réservations dans Supabase
-            await supabase.from('reservation_payments').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-            await supabase.from('reservation_services').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-            await supabase.from('reservations').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-            
-            // Vider la queue de sync pour les réservations
-            const pendingOps = await localDb.syncQueue.where('table').equals('reservations').toArray();
-            for (const op of pendingOps) {
-                await localDb.syncQueue.delete(op.id!);
-            }
-            
-            console.log('[Reset] Toutes les réservations supprimées de Supabase');
-        } catch (err) {
-            console.error('[Reset] Erreur lors de la suppression dans Supabase:', err);
+    // Supprimer directement dans Supabase
+    try {
+        const { supabase } = await import('./supabase');
+        
+        // 1. Récupérer tous les IDs des réservations depuis Supabase
+        const { data: reservations, error: fetchError } = await supabase
+            .from('reservations')
+            .select('id');
+        
+        if (fetchError) {
+            console.error('[Reset] Erreur lors de la récupération des réservations:', fetchError);
+            return;
         }
+        
+        if (!reservations || reservations.length === 0) {
+            console.log('[Reset] Aucune réservation à supprimer dans Supabase');
+            return;
+        }
+        
+        console.log(`[Reset] ${reservations.length} réservations trouvées dans Supabase`);
+        
+        // 2. Supprimer les paiements liés (si la table existe)
+        for (const res of reservations) {
+            try {
+                await supabase.from('reservation_payments').delete().eq('reservation_id', res.id);
+            } catch (e) { /* table peut ne pas exister */ }
+            
+            try {
+                await supabase.from('reservation_services').delete().eq('reservation_id', res.id);
+            } catch (e) { /* table peut ne pas exister */ }
+        }
+        
+        // 3. Supprimer chaque réservation une par une
+        let deletedCount = 0;
+        for (const res of reservations) {
+            const { error: deleteError } = await supabase
+                .from('reservations')
+                .delete()
+                .eq('id', res.id);
+            
+            if (deleteError) {
+                console.error(`[Reset] Erreur suppression ${res.id}:`, deleteError.message);
+            } else {
+                deletedCount++;
+            }
+        }
+        
+        console.log(`[Reset] ✓ ${deletedCount}/${reservations.length} réservations supprimées de Supabase`);
+        
+    } catch (err) {
+        console.error('[Reset] Erreur lors de la suppression dans Supabase:', err);
     }
 };
 
