@@ -198,4 +198,20 @@ export interface ModuleTheme {
     colorKey: string; // 'slate' | 'indigo' | 'emerald' | 'amber' | 'rose' | 'violet' | 'sky'
 }
 
-export type ModuleThemesMap = Record<string, string>;
+export interface ModuleThemesMap extends Record<string, string> {}
+
+export interface SyncMetadata {
+  _synced: boolean;
+  _lastModified: number;
+  _deleted?: boolean;
+}
+
+export interface SyncOperation {
+  id?: number;
+  action: 'create' | 'update' | 'delete';
+  table: string;
+  entityId: string;
+  data: any;
+  timestamp: number;
+  retryCount: number;
+}

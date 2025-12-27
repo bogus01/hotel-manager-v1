@@ -2,6 +2,7 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Home, Bell, ArrowLeft, Hotel } from 'lucide-react';
+import ConnectionStatus from './ConnectionStatus';
 
 interface HeaderProps {
   title?: string;
@@ -58,6 +59,7 @@ const Header: React.FC<HeaderProps> = ({ title, actions, backLink = '/', backLab
       </div>
 
       <div className="flex items-center gap-4">
+        <ConnectionStatus />
         {actions}
         
         {!hideProfile && (
