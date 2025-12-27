@@ -41,7 +41,7 @@ const InvoicePreview: React.FC<InvoicePreviewProps> = ({
     isProforma = false
 }) => {
     const [includeGroup, setIncludeGroup] = useState(initialIncludeGroup);
-    const [scale, setScale] = useState(0.9);
+    const [scale, setScale] = useState(0.85);
     const [boardPrices, setBoardPrices] = useState<BoardConfiguration | null>(null);
     const [availableTaxes, setAvailableTaxes] = useState<Tax[]>([]);
     const containerRef = useRef<HTMLDivElement>(null);
@@ -76,7 +76,7 @@ const InvoicePreview: React.FC<InvoicePreviewProps> = ({
             const A4H = 1123;
             const scaleW = containerW / A4W;
             const scaleH = containerH / A4H;
-            setScale(Math.min(scaleW, scaleH, 0.9));
+            // setScale(Math.min(scaleW, scaleH, 0.9)); // Commenté pour garder le zoom à 85% par défaut
         }
     };
 
@@ -198,7 +198,13 @@ const InvoicePreview: React.FC<InvoicePreviewProps> = ({
 
     const handleDownloadPDF = (e: React.MouseEvent) => {
         e.preventDefault();
+        const originalTitle = document.title;
+        const fileName = isProforma ? `Proforma_${reservation.clientName}` : `Facture_${reservation.clientName}`;
+        document.title = fileName.replace(/\s+/g, '_');
         window.print();
+        setTimeout(() => {
+            document.title = originalTitle;
+        }, 1000);
     };
 
     return (

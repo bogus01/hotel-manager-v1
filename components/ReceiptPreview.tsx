@@ -35,7 +35,7 @@ const ReceiptPreview: React.FC<ReceiptPreviewProps> = ({ payments, reservation, 
         const A4H = 1123;
         const scaleW = containerW / A4W;
         const scaleH = containerH / A4H;
-        setScale(Math.min(scaleW, scaleH, 1.2));
+        // setScale(Math.min(scaleW, scaleH, 1.2)); // Commenté pour garder le zoom à 85% par défaut
     }
   };
 
@@ -47,6 +47,17 @@ const ReceiptPreview: React.FC<ReceiptPreviewProps> = ({ payments, reservation, 
         clearTimeout(timer);
     };
   }, []);
+
+  const handleDownloadPDF = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const originalTitle = document.title;
+    const fileName = isMulti ? `Releve_Reglements_${reservation.clientName}` : `Recu_Reglement_${reservation.clientName}`;
+    document.title = fileName.replace(/\s+/g, '_');
+    window.print();
+    setTimeout(() => {
+      document.title = originalTitle;
+    }, 1000);
+  };
 
   const invoiceRef = `INV-${format(new Date(), 'yyyy')}-${reservation.id.slice(-4).toUpperCase()}`;
 
@@ -96,7 +107,7 @@ const ReceiptPreview: React.FC<ReceiptPreviewProps> = ({ payments, reservation, 
             </div>
 
             <button 
-                onClick={() => window.print()} 
+                onClick={handleDownloadPDF} 
                 className="bg-white/10 hover:bg-white/20 text-white px-5 h-10 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 border border-white/10 active:scale-95 shadow-lg shadow-black/20"
             >
                 <Download size={18}/> Télécharger PDF
