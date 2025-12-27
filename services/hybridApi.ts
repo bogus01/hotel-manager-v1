@@ -5,12 +5,13 @@ import * as mappers from './mappers';
 import { 
     Room, RoomCategory, Client, Reservation, Tax, PaymentMethod, 
     ServiceCatalogItem, User, ReservationStatus, ServiceItem, Payment,
-    CurrencySettings, BoardConfiguration, PlanningSettings, ModuleThemesMap
+    CurrencySettings, BoardConfiguration, PlanningSettings, ModuleThemesMap,
+    BoardType
 } from '../types';
 
-// Helper pour transformer les données de la DB locale (brutes Supabase) en types TS via mappers
 const mapArray = <T, R>(items: any[], mapper: (item: any) => R): R[] => items.map(mapper);
 
+// TAXES
 export const fetchTaxes = async (): Promise<Tax[]> => {
     const items = await localDb.taxes.toArray();
     return mapArray(items, mappers.mapTaxFromDB);
@@ -24,8 +25,6 @@ export const createTax = async (tax: Omit<Tax, 'id'>): Promise<Tax> => {
     await syncManager.queueOperation({ action: 'create', table: 'taxes', entityId: id, data: dbItem });
     return newTax;
 };
-
-// ... (garder le début existant)
 
 export const updateTax = async (tax: Tax): Promise<Tax> => {
     const dbItem = mappers.mapTaxToDB(tax);
@@ -54,9 +53,33 @@ export const createRoomCategory = async (cat: Omit<RoomCategory, 'id'>): Promise
     return newCat;
 };
 
-// ... et ainsi de suite pour toutes les entités ...
-// Pour gagner du temps et être précis, je vais implémenter les exports restants 
-// en me basant sur le fichier api.ts existant.
+export const updateRoomCategory = async (cat: RoomCategory): Promise<RoomCategory> => {
+    const dbItem = mappers.mapRoomCategoryToDB(cat);
+    await localDb.roomCategories.put({ ...dbItem, _synced: false, _lastModified: Date.now() });
+    await syncManager.queueOperation({ action: 'update', table: 'room_categories', entityId: cat.id, data: dbItem });
+    return cat;
+};
+
+export const deleteRoomCategory = async (id: string): Promise<boolean> => {
+    await localDb.roomCategories.delete(id);
+    await syncManager.queueOperation({ action: 'delete', table: 'room_categories', entityId: id, data: null });
+    return true;
+};
+
+// ROOMS
+export const fetchRooms = async (): Promise<Room[]> => {
+    const items = await localDb.rooms.orderBy('number').toArray();
+    return mapArray(items, mappers.mapRoomFromDB);
+};
+
+export const createRoom = async (room: Omit<Room, 'id' | 'status'>): Promise<Room> => {
+    const id = crypto.randomUUID();
+    const newRoom = { ...room, id, status: 'Propre' } as any;
+    const dbItem = mappers.mapRoomToDB(newRoom);
+    await localDb.rooms.add({ ...dbItem, _synced: false, _lastModified: Date.now() });
+    await syncManager.queueOperation({ action: 'create', table: 'rooms', entityId: id, data: dbItem });
+    return mappers.mapRoomFromDB(dbItem);
+};
 
 export const updateRoom = async (room: Room): Promise<Room> => {
     const dbItem = mappers.mapRoomToDB(room);
@@ -70,118 +93,26 @@ export const deleteRoom = async (id: string): Promise<void> => {
     await syncManager.queueOperation({ action: 'delete', table: 'rooms', entityId: id, data: null });
 };
 
+// CLIENTS
+export const fetchClients = async (): Promise<Client[]> => {
+    const items = await localDb.clients.orderBy('last_name').toArray();
+    return mapArray(items, mappers.mapClientFromDB);
+};
+
+export const createClient = async (client: Omit<Client, 'id'>): Promise<Client> => {
+    const id = crypto.randomUUID();
+    const newClient = { ...client, id, balance: 0 } as Client;
+    const dbItem = mappers.mapClientToDB(newClient);
+    await localDb.clients.add({ ...dbItem, _synced: false, _lastModified: Date.now() });
+    await syncManager.queueOperation({ action: 'create', table: 'clients', entityId: id, data: dbItem });
+    return newClient;
+};
+
 export const updateClient = async (client: Client): Promise<Client> => {
     const dbItem = mappers.mapClientToDB(client);
     await localDb.clients.put({ ...dbItem, _synced: false, _lastModified: Date.now() });
     await syncManager.queueOperation({ action: 'update', table: 'clients', entityId: client.id, data: dbItem });
     return client;
-};
-
-export const updateReservation = async (reservation: Reservation): Promise<Reservation> => {
-    const dbItem = mappers.mapReservationToDB(reservation);
-    await localDb.reservations.put({ ...dbItem, _synced: false, _lastModified: Date.now() });
-    await syncManager.queueOperation({ action: 'update', table: 'reservations', entityId: reservation.id, data: dbItem });
-    return reservation;
-};
-
-export const deleteReservation = async (id: string): Promise<void> => {
-    await localDb.reservations.delete(id);
-    await syncManager.queueOperation({ action: 'delete', table: 'reservations', entityId: id, data: null });
-};
-
-// CATALOGUE SERVICES
-export const fetchServiceCatalog = async (): Promise<ServiceCatalogItem[]> => {
-    const items = await localDb.serviceCatalog.toArray();
-    return mapArray(items, mappers.mapServiceCatalogFromDB);
-};
-
-export const createCatalogItem = async (item: Omit<ServiceCatalogItem, 'id'>): Promise<ServiceCatalogItem> => {
-    const id = crypto.randomUUID();
-    const newItem = { ...item, id } as ServiceCatalogItem;
-    const dbItem = mappers.mapServiceCatalogToDB(newItem);
-    await localDb.serviceCatalog.add({ ...dbItem, _synced: false, _lastModified: Date.now() });
-    await syncManager.queueOperation({ action: 'create', table: 'service_catalog', entityId: id, data: dbItem });
-    return newItem;
-};
-
-export const deleteCatalogItem = async (id: string): Promise<void> => {
-    await localDb.serviceCatalog.delete(id);
-    await syncManager.queueOperation({ action: 'delete', table: 'service_catalog', entityId: id, data: null });
-};
-
-// MODES DE PAIEMENT
-export const fetchPaymentMethods = async (): Promise<PaymentMethod[]> => {
-    const items = await localDb.paymentMethods.toArray();
-    return mapArray(items, mappers.mapPaymentMethodFromDB);
-};
-
-export const createPaymentMethod = async (method: Omit<PaymentMethod, 'id'>): Promise<PaymentMethod> => {
-    const id = crypto.randomUUID();
-    const newMethod = { ...method, id } as PaymentMethod;
-    const dbItem = mappers.mapPaymentMethodToDB(newMethod);
-    await localDb.paymentMethods.add({ ...dbItem, _synced: false, _lastModified: Date.now() });
-    await syncManager.queueOperation({ action: 'create', table: 'payment_methods', entityId: id, data: dbItem });
-    return newMethod;
-};
-
-// UTILISATEURS
-export const fetchUsers = async (): Promise<User[]> => {
-    const items = await localDb.users.toArray();
-    return mapArray(items, mappers.mapUserFromDB);
-};
-
-export const createUser = async (user: Omit<User, 'id'>): Promise<User> => {
-    const id = crypto.randomUUID();
-    const newUser = { ...user, id } as User;
-    const dbItem = mappers.mapUserToDB(newUser);
-    await localDb.users.add({ ...dbItem, _synced: false, _lastModified: Date.now() });
-    await syncManager.queueOperation({ action: 'create', table: 'users', entityId: id, data: dbItem });
-    return newUser;
-};
-
-// SETTINGS
-export const updatePlanningSettings = async (settings: PlanningSettings): Promise<void> => {
-    await localDb.settings.put({ key: 'planning_settings', value: settings });
-    await syncManager.queueOperation({ action: 'update', table: 'settings', entityId: 'planning_settings', data: { key: 'planning_settings', value: settings } });
-};
-
-export const fetchCurrencySettings = async (): Promise<CurrencySettings> => {
-    const s = await localDb.settings.get('currency');
-    return s?.value || { code: 'EUR', symbol: '€', position: 'suffix', decimalSeparator: ',', thousandSeparator: ' ', decimalPlaces: 2 };
-};
-
-export const updateCurrencySettings = async (settings: CurrencySettings): Promise<void> => {
-    await localDb.settings.put({ key: 'currency', value: settings });
-    await syncManager.queueOperation({ action: 'update', table: 'settings', entityId: 'currency', data: { key: 'currency', value: settings } });
-};
-
-export const fetchBoardConfig = async (): Promise<BoardConfiguration> => {
-    const s = await localDb.settings.get('board_config');
-    return s?.value || { [mappers.BoardType.BB]: 15, [mappers.BoardType.HB]: 40, [mappers.BoardType.FB]: 65, [mappers.BoardType.ALL]: 95 };
-};
-
-export const updateBoardConfig = async (config: BoardConfiguration): Promise<void> => {
-    await localDb.settings.put({ key: 'board_config', value: config });
-    await syncManager.queueOperation({ action: 'update', table: 'settings', entityId: 'board_config', data: { key: 'board_config', value: config } });
-};
-
-export const fetchModuleThemes = async (): Promise<ModuleThemesMap> => {
-    const s = await localDb.settings.get('module_themes');
-    return s?.value || { '/planning': 'indigo', '/reports': 'amber', '/reservations': 'slate', '/clients': 'slate', '/daily-planning': 'violet', '/dashboard': 'slate', '/billing': 'slate', '/settings': 'slate' };
-};
-
-export const updateModuleTheme = async (path: string, colorKey: string): Promise<ModuleThemesMap> => {
-    const themes = await fetchModuleThemes();
-    themes[path] = colorKey;
-    await localDb.settings.put({ key: 'module_themes', value: themes });
-    await syncManager.queueOperation({ action: 'update', table: 'settings', entityId: 'module_themes', data: { key: 'module_themes', value: themes } });
-    return themes;
-};
-
-// Fonctions additionnelles manquantes
-export const updateReservationStatus = async (id: string, status: ReservationStatus): Promise<void> => {
-    await localDb.reservations.update(id, { status });
-    await syncManager.queueOperation({ action: 'update', table: 'reservations', entityId: id, data: { status } });
 };
 
 export const updateClientBalance = async (id: string, amount: number): Promise<Client | null> => {
@@ -202,35 +133,61 @@ export const addToClientBalance = async (id: string, amount: number): Promise<Cl
     return { ...client, balance: newBalance } as any;
 };
 
-export const addServiceToReservation = async (id: string, service: ServiceItem): Promise<void> => {
-    const res = await localDb.reservations.get(id);
-    if (res) {
-        const sId = crypto.randomUUID();
-        const sItem = mappers.mapServiceToDB({ ...service, id: sId }, id);
-        const newServices = [...(res.services || []), sItem];
-        const newTotal = Number(res.total_price) + (service.price * service.quantity);
-        await localDb.reservations.update(id, { services: newServices, total_price: newTotal });
-        await syncManager.queueOperation({ action: 'update', table: 'reservations', entityId: id, data: { services: newServices, total_price: newTotal } });
-        // On pourrait aussi avoir une table services séparée, mais ici on simplifie
-        await syncManager.queueOperation({ action: 'create', table: 'services', entityId: sId, data: sItem });
-    }
+// RESERVATIONS
+export const fetchReservations = async (): Promise<Reservation[]> => {
+    const reservations = await localDb.reservations.toArray();
+    return mapArray(reservations, (r) => mappers.mapReservationFromDB(r, r.services || [], r.payments || []));
 };
 
-export const addPaymentToReservation = async (id: string, payment: Payment): Promise<void> => {
-    const res = await localDb.reservations.get(id);
-    if (res) {
-        const pId = crypto.randomUUID();
-        const pItem = mappers.mapPaymentToDB({ ...payment, id: pId }, id);
-        const newPayments = [...(res.payments || []), pItem];
-        await localDb.reservations.update(id, { payments: newPayments });
-        await syncManager.queueOperation({ action: 'update', table: 'reservations', entityId: id, data: { payments: newPayments } });
-        await syncManager.queueOperation({ action: 'create', table: 'payments', entityId: pId, data: pItem });
+export const createReservation = async (res: Omit<Reservation, 'id'>): Promise<Reservation> => {
+    const id = crypto.randomUUID();
+    const newRes = { ...res, id } as Reservation;
+    const dbItem = mappers.mapReservationToDB(newRes);
+    await localDb.reservations.add({ ...dbItem, _synced: false, _lastModified: Date.now() });
+    await syncManager.queueOperation({ action: 'create', table: 'reservations', entityId: id, data: dbItem });
+
+    if (res.services && res.services.length > 0) {
+        for (const s of res.services) {
+            const sId = crypto.randomUUID();
+            const sItem = mappers.mapServiceToDB({ ...s, id: sId }, id);
+            await syncManager.queueOperation({ action: 'create', table: 'services', entityId: sId, data: sItem });
+        }
     }
+    if (res.payments && res.payments.length > 0) {
+        for (const p of res.payments) {
+            const pId = crypto.randomUUID();
+            const pItem = mappers.mapPaymentToDB({ ...p, id: pId }, id);
+            await syncManager.queueOperation({ action: 'create', table: 'payments', entityId: pId, data: pItem });
+        }
+    }
+    return newRes;
 };
 
-export const fetchClientHistory = async (clientId: string): Promise<Reservation[]> => {
-    const items = await localDb.reservations.where('clientId').equals(clientId).toArray();
-    return mapArray(items, (r) => mappers.mapReservationFromDB(r, [], []));
+export const updateReservation = async (reservation: Reservation): Promise<Reservation> => {
+    const dbItem = mappers.mapReservationToDB(reservation);
+    await localDb.reservations.put({ ...dbItem, _synced: false, _lastModified: Date.now() });
+    await syncManager.queueOperation({ action: 'update', table: 'reservations', entityId: reservation.id, data: dbItem });
+    return reservation;
+};
+
+export const deleteReservation = async (id: string): Promise<void> => {
+    await localDb.reservations.delete(id);
+    await syncManager.queueOperation({ action: 'delete', table: 'reservations', entityId: id, data: null });
+};
+
+export const updateReservationDate = async (id: string, checkIn: Date, checkOut: Date, roomId: string): Promise<void> => {
+    const updates = {
+        check_in: checkIn.toISOString().split('T')[0],
+        check_out: checkOut.toISOString().split('T')[0],
+        room_id: roomId
+    };
+    await localDb.reservations.update(id, updates);
+    await syncManager.queueOperation({ action: 'update', table: 'reservations', entityId: id, data: updates });
+};
+
+export const updateReservationStatus = async (id: string, status: ReservationStatus): Promise<void> => {
+    await localDb.reservations.update(id, { status });
+    await syncManager.queueOperation({ action: 'update', table: 'reservations', entityId: id, data: { status } });
 };
 
 export const createMultipleReservations = async (newResList: Omit<Reservation, 'id'>[]): Promise<Reservation[]> => {
@@ -248,9 +205,36 @@ export const updateMultipleReservations = async (updatedList: Reservation[]): Pr
     }
 };
 
+export const resetPlanningData = async (): Promise<void> => {
+    await localDb.reservations.clear();
+    await syncManager.queueOperation({ action: 'delete', table: 'reservations', entityId: '*', data: null });
+};
+
+// SERVICES ET PAIEMENTS
+export const addServiceToReservation = async (id: string, service: ServiceItem): Promise<void> => {
+    const res = await localDb.reservations.get(id);
+    if (res) {
+        const sId = crypto.randomUUID();
+        const sItem = mappers.mapServiceToDB({ ...service, id: sId }, id);
+        const newServices = [...(res.services || []), sItem];
+        const newTotal = Number(res.total_price) + (service.price * service.quantity);
+        await localDb.reservations.update(id, { services: newServices, total_price: newTotal });
+        await syncManager.queueOperation({ action: 'create', table: 'services', entityId: sId, data: sItem });
+    }
+};
+
+export const addPaymentToReservation = async (id: string, payment: Payment): Promise<void> => {
+    const res = await localDb.reservations.get(id);
+    if (res) {
+        const pId = crypto.randomUUID();
+        const pItem = mappers.mapPaymentToDB({ ...payment, id: pId }, id);
+        const newPayments = [...(res.payments || []), pItem];
+        await localDb.reservations.update(id, { payments: newPayments });
+        await syncManager.queueOperation({ action: 'create', table: 'payments', entityId: pId, data: pItem });
+    }
+};
+
 export const deletePayment = async (id: string): Promise<void> => {
-    // Cette fonction nécessiterait de trouver la réservation associée dans localDb
-    // ou d'avoir une table payments séparée. Pour l'instant on simplifie.
     await syncManager.queueOperation({ action: 'delete', table: 'payments', entityId: id, data: null });
 };
 
@@ -258,3 +242,134 @@ export const deleteService = async (id: string, reservationId: string): Promise<
     await syncManager.queueOperation({ action: 'delete', table: 'services', entityId: id, data: null });
 };
 
+export const fetchClientHistory = async (clientId: string): Promise<Reservation[]> => {
+    const items = await localDb.reservations.where('clientId').equals(clientId).toArray();
+    return mapArray(items, (r) => mappers.mapReservationFromDB(r, [], []));
+};
+
+// SERVICE CATALOG
+export const fetchServiceCatalog = async (): Promise<ServiceCatalogItem[]> => {
+    const items = await localDb.serviceCatalog.toArray();
+    return mapArray(items, mappers.mapServiceCatalogFromDB);
+};
+
+export const createCatalogItem = async (item: Omit<ServiceCatalogItem, 'id'>): Promise<ServiceCatalogItem> => {
+    const id = crypto.randomUUID();
+    const newItem = { ...item, id } as ServiceCatalogItem;
+    const dbItem = mappers.mapServiceCatalogToDB(newItem);
+    await localDb.serviceCatalog.add({ ...dbItem, _synced: false, _lastModified: Date.now() });
+    await syncManager.queueOperation({ action: 'create', table: 'service_catalog', entityId: id, data: dbItem });
+    return newItem;
+};
+
+export const deleteCatalogItem = async (id: string): Promise<void> => {
+    await localDb.serviceCatalog.delete(id);
+    await syncManager.queueOperation({ action: 'delete', table: 'service_catalog', entityId: id, data: null });
+};
+
+// PAYMENT METHODS
+export const fetchPaymentMethods = async (): Promise<PaymentMethod[]> => {
+    const items = await localDb.paymentMethods.toArray();
+    return mapArray(items, mappers.mapPaymentMethodFromDB);
+};
+
+export const createPaymentMethod = async (method: Omit<PaymentMethod, 'id'>): Promise<PaymentMethod> => {
+    const id = crypto.randomUUID();
+    const newMethod = { ...method, id } as PaymentMethod;
+    const dbItem = mappers.mapPaymentMethodToDB(newMethod);
+    await localDb.paymentMethods.add({ ...dbItem, _synced: false, _lastModified: Date.now() });
+    await syncManager.queueOperation({ action: 'create', table: 'payment_methods', entityId: id, data: dbItem });
+    return newMethod;
+};
+
+export const updatePaymentMethod = async (method: PaymentMethod): Promise<PaymentMethod> => {
+    const dbItem = mappers.mapPaymentMethodToDB(method);
+    await localDb.paymentMethods.put({ ...dbItem, _synced: false, _lastModified: Date.now() });
+    await syncManager.queueOperation({ action: 'update', table: 'payment_methods', entityId: method.id, data: dbItem });
+    return method;
+};
+
+export const deletePaymentMethod = async (id: string): Promise<boolean> => {
+    await localDb.paymentMethods.delete(id);
+    await syncManager.queueOperation({ action: 'delete', table: 'payment_methods', entityId: id, data: null });
+    return true;
+};
+
+// USERS
+export const fetchUsers = async (): Promise<User[]> => {
+    const items = await localDb.users.toArray();
+    return mapArray(items, mappers.mapUserFromDB);
+};
+
+export const createUser = async (user: Omit<User, 'id'>): Promise<User> => {
+    const id = crypto.randomUUID();
+    const newUser = { ...user, id } as User;
+    const dbItem = mappers.mapUserToDB(newUser);
+    await localDb.users.add({ ...dbItem, _synced: false, _lastModified: Date.now() });
+    await syncManager.queueOperation({ action: 'create', table: 'users', entityId: id, data: dbItem });
+    return newUser;
+};
+
+export const updateUser = async (user: User): Promise<User> => {
+    const dbItem = mappers.mapUserToDB(user);
+    await localDb.users.put({ ...dbItem, _synced: false, _lastModified: Date.now() });
+    await syncManager.queueOperation({ action: 'update', table: 'users', entityId: user.id, data: dbItem });
+    return user;
+};
+
+export const deleteUser = async (id: string): Promise<void> => {
+    await localDb.users.delete(id);
+    await syncManager.queueOperation({ action: 'delete', table: 'users', entityId: id, data: null });
+};
+
+// SETTINGS
+export const fetchPlanningSettings = async (): Promise<PlanningSettings> => {
+    const s = await localDb.settings.get('planning_settings');
+    return s?.value || {
+        defaultZoom: 100, defaultView: 'month', historyOffset: 5,
+        navigationStep: 2, showRoomStatus: true, selectionColor: '#6366f1',
+        barStyle: 'translucent',
+        statusColors: {
+            confirmed: '#6366f1', checkedIn: '#10b981',
+            checkedOut: '#64748b', option: '#f59e0b', cancelled: '#ef4444'
+        }
+    };
+};
+
+export const updatePlanningSettings = async (settings: PlanningSettings): Promise<void> => {
+    await localDb.settings.put({ key: 'planning_settings', value: settings });
+    await syncManager.queueOperation({ action: 'update', table: 'settings', entityId: 'planning_settings', data: { key: 'planning_settings', value: settings } });
+};
+
+export const fetchCurrencySettings = async (): Promise<CurrencySettings> => {
+    const s = await localDb.settings.get('currency');
+    return s?.value || { code: 'EUR', symbol: '€', position: 'suffix', decimalSeparator: ',', thousandSeparator: ' ', decimalPlaces: 2 };
+};
+
+export const updateCurrencySettings = async (settings: CurrencySettings): Promise<void> => {
+    await localDb.settings.put({ key: 'currency', value: settings });
+    await syncManager.queueOperation({ action: 'update', table: 'settings', entityId: 'currency', data: { key: 'currency', value: settings } });
+};
+
+export const fetchBoardConfig = async (): Promise<BoardConfiguration> => {
+    const s = await localDb.settings.get('board_config');
+    return s?.value || { [BoardType.BB]: 15, [BoardType.HB]: 40, [BoardType.FB]: 65, [BoardType.ALL]: 95 };
+};
+
+export const updateBoardConfig = async (config: BoardConfiguration): Promise<void> => {
+    await localDb.settings.put({ key: 'board_config', value: config });
+    await syncManager.queueOperation({ action: 'update', table: 'settings', entityId: 'board_config', data: { key: 'board_config', value: config } });
+};
+
+export const fetchModuleThemes = async (): Promise<ModuleThemesMap> => {
+    const s = await localDb.settings.get('module_themes');
+    return s?.value || { '/planning': 'indigo', '/reports': 'amber', '/reservations': 'slate', '/clients': 'slate', '/daily-planning': 'violet', '/dashboard': 'slate', '/billing': 'slate', '/settings': 'slate' };
+};
+
+export const updateModuleTheme = async (path: string, colorKey: string): Promise<ModuleThemesMap> => {
+    const themes = await fetchModuleThemes();
+    themes[path] = colorKey;
+    await localDb.settings.put({ key: 'module_themes', value: themes });
+    await syncManager.queueOperation({ action: 'update', table: 'settings', entityId: 'module_themes', data: { key: 'module_themes', value: themes } });
+    return themes;
+};
