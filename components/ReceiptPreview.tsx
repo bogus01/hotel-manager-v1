@@ -6,6 +6,8 @@ import {
 } from 'lucide-react';
 import { format } from 'date-fns';
 import fr from 'date-fns/locale/fr';
+// @ts-ignore
+import html2pdf from 'html2pdf.js';
 import { Payment, Reservation, Room } from '../types';
 
 interface ReceiptPreviewProps {
@@ -48,15 +50,45 @@ const ReceiptPreview: React.FC<ReceiptPreviewProps> = ({ payments, reservation, 
     };
   }, []);
 
-  const handleDownloadPDF = (e: React.MouseEvent) => {
+  const handleDownloadPDF = async (e: React.MouseEvent) => {
     e.preventDefault();
-    const originalTitle = document.title;
-    const fileName = isMulti ? `Releve_Reglements_${reservation.clientName}` : `Recu_Reglement_${reservation.clientName}`;
-    document.title = fileName.replace(/\s+/g, '_');
-    window.print();
-    setTimeout(() => {
-      document.title = originalTitle;
-    }, 1000);
+    if (!receiptRef.current) return;
+
+    const fileName = isMulti 
+        ? `Releve_Reglements_${reservation.clientName.replace(/\s+/g, '_')}.pdf` 
+        : `Recu_Reglement_${reservation.clientName.replace(/\s+/g, '_')}.pdf`;
+
+    const opt = {
+        margin: 0,
+        filename: fileName,
+        image: { type: 'jpeg', quality: 0.98 },
+        html2canvas: { 
+            scale: 2, 
+            useCORS: true, 
+            letterRendering: true,
+            backgroundColor: '#ffffff'
+        },
+        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+    };
+
+    try {
+        const element = receiptRef.current.cloneNode(true) as HTMLElement;
+        element.style.transform = 'scale(1)';
+        
+        const tempContainer = document.createElement('div');
+        tempContainer.style.position = 'absolute';
+        tempContainer.style.left = '-9999px';
+        tempContainer.style.top = '-9999px';
+        tempContainer.appendChild(element);
+        document.body.appendChild(tempContainer);
+
+        await html2pdf().set(opt).from(element).save();
+        
+        document.body.removeChild(tempContainer);
+    } catch (err) {
+        console.error('Erreur lors de la génération du PDF:', err);
+        alert('Une erreur est survenue lors de la génération du PDF.');
+    }
   };
 
   const invoiceRef = `INV-${format(new Date(), 'yyyy')}-${reservation.id.slice(-4).toUpperCase()}`;

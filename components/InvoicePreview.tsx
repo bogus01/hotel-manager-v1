@@ -8,6 +8,8 @@ import {
 } from 'lucide-react';
 import { format, differenceInDays, addDays } from 'date-fns';
 import fr from 'date-fns/locale/fr';
+// @ts-ignore
+import html2pdf from 'html2pdf.js';
 import { Reservation, Room, ReservationStatus, Client, BoardType, BoardConfiguration, Tax } from '../types';
 import * as api from '../services/api';
 
@@ -196,15 +198,47 @@ const InvoicePreview: React.FC<InvoicePreviewProps> = ({
     const totalPaid = allPayments.reduce((acc, p) => acc + p.amount, 0);
     const balanceDue = totalTTC - totalPaid;
 
-    const handleDownloadPDF = (e: React.MouseEvent) => {
+    const handleDownloadPDF = async (e: React.MouseEvent) => {
         e.preventDefault();
-        const originalTitle = document.title;
-        const fileName = isProforma ? `Proforma_${reservation.clientName}` : `Facture_${reservation.clientName}`;
-        document.title = fileName.replace(/\s+/g, '_');
-        window.print();
-        setTimeout(() => {
-            document.title = originalTitle;
-        }, 1000);
+        if (!invoiceRef.current) return;
+
+        const fileName = isProforma 
+            ? `Proforma_${reservation.clientName.replace(/\s+/g, '_')}.pdf` 
+            : `Facture_${reservation.clientName.replace(/\s+/g, '_')}.pdf`;
+
+        const opt = {
+            margin: 0,
+            filename: fileName,
+            image: { type: 'jpeg', quality: 0.98 },
+            html2canvas: { 
+                scale: 2, 
+                useCORS: true, 
+                letterRendering: true,
+                backgroundColor: '#ffffff'
+            },
+            jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+        };
+
+        try {
+            // Créer un clone de l'élément pour éviter les problèmes de transformation (zoom) lors de la capture
+            const element = invoiceRef.current.cloneNode(true) as HTMLElement;
+            element.style.transform = 'scale(1)'; // Forcer l'échelle à 1 pour le PDF
+            
+            // Créer un conteneur temporaire caché pour le rendu
+            const tempContainer = document.createElement('div');
+            tempContainer.style.position = 'absolute';
+            tempContainer.style.left = '-9999px';
+            tempContainer.style.top = '-9999px';
+            tempContainer.appendChild(element);
+            document.body.appendChild(tempContainer);
+
+            await html2pdf().set(opt).from(element).save();
+            
+            document.body.removeChild(tempContainer);
+        } catch (err) {
+            console.error('Erreur lors de la génération du PDF:', err);
+            alert('Une erreur est survenue lors de la génération du PDF.');
+        }
     };
 
     return (
