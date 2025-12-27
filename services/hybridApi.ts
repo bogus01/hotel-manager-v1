@@ -6,13 +6,13 @@ import {
     Room, RoomCategory, Client, Reservation, Tax, PaymentMethod, 
     ServiceCatalogItem, User, ReservationStatus, ServiceItem, Payment,
     CurrencySettings, BoardConfiguration, PlanningSettings, ModuleThemesMap,
-    BoardType
+    BoardType, RoomStatus
 } from '../types';
 
 // Helper pour générer des IDs robustes
-const generateId = () => {
+const generateId = (): string => {
     try {
-        return generateId();
+        return crypto.randomUUID();
     } catch (e) {
         return Date.now().toString(36) + Math.random().toString(36).substring(2);
     }

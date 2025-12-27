@@ -5,25 +5,69 @@ import { SyncOperation } from '../types';
 import * as mappers from './mappers';
 
 class SyncManager {
-    private isOnline: boolean = navigator.onLine;
+    private isOnline: boolean = false;
     private syncInProgress: boolean = false;
     private listeners: ((online: boolean) => void)[] = [];
+    private checkInterval: number | null = null;
+    private lastError: string | null = null;
 
     constructor() {
-        window.addEventListener('online', () => this.handleStatusChange(true));
-        window.addEventListener('offline', () => this.handleStatusChange(false));
+        // Écouter les événements réseau comme indicateurs initiaux
+        window.addEventListener('online', () => this.checkConnection());
+        window.addEventListener('offline', () => this.setOnlineStatus(false));
+        
+        // Vérification initiale
+        this.checkConnection();
+        
+        // Vérification périodique toutes les 30 secondes
+        this.checkInterval = window.setInterval(() => this.checkConnection(), 30000);
     }
 
-    private handleStatusChange(online: boolean) {
-        this.isOnline = online;
-        this.listeners.forEach(l => l(online));
-        if (online) {
-            this.sync();
+    // Vérification réelle de la connexion en pingant Supabase
+    private async checkConnection(): Promise<boolean> {
+        if (!navigator.onLine) {
+            this.setOnlineStatus(false);
+            return false;
+        }
+
+        try {
+            // Ping réel vers Supabase - requête légère
+            const { error } = await supabase.from('rooms').select('id').limit(1);
+            
+            if (error) {
+                console.warn('[SyncManager] Supabase error:', error.message);
+                this.lastError = error.message;
+                this.setOnlineStatus(false);
+                return false;
+            }
+            
+            this.lastError = null;
+            this.setOnlineStatus(true);
+            return true;
+        } catch (err) {
+            console.warn('[SyncManager] Connection check failed:', err);
+            this.lastError = err instanceof Error ? err.message : 'Unknown error';
+            this.setOnlineStatus(false);
+            return false;
+        }
+    }
+
+    private setOnlineStatus(online: boolean) {
+        if (this.isOnline !== online) {
+            console.log(`[SyncManager] Status changed: ${online ? 'ONLINE' : 'OFFLINE'}`);
+            this.isOnline = online;
+            this.listeners.forEach(l => l(online));
+            
+            if (online) {
+                this.sync();
+            }
         }
     }
 
     public subscribe(callback: (online: boolean) => void) {
         this.listeners.push(callback);
+        // Envoyer immédiatement l'état actuel au nouveau subscriber
+        callback(this.isOnline);
         return () => {
             this.listeners = this.listeners.filter(l => l !== callback);
         };
@@ -33,26 +77,51 @@ class SyncManager {
         return this.isOnline;
     }
 
+    public getLastError() {
+        return this.lastError;
+    }
+
+    // Forcer une vérification manuelle
+    public async forceCheck(): Promise<boolean> {
+        return await this.checkConnection();
+    }
+
     public async queueOperation(op: Omit<SyncOperation, 'timestamp' | 'retryCount'>) {
         await localDb.syncQueue.add({
             ...op,
             timestamp: Date.now(),
             retryCount: 0
         });
+        
+        // Tenter la synchronisation si on pense être en ligne
         if (this.isOnline) {
             this.sync();
         }
     }
 
     public async sync() {
-        if (this.syncInProgress || !this.isOnline) return;
+        if (this.syncInProgress) {
+            console.log('[SyncManager] Sync already in progress, skipping');
+            return;
+        }
+        
+        // Vérifier d'abord la connexion réelle
+        const isReallyOnline = await this.checkConnection();
+        if (!isReallyOnline) {
+            console.log('[SyncManager] Not online, skipping sync');
+            return;
+        }
+
         this.syncInProgress = true;
+        console.log('[SyncManager] Starting sync...');
 
         try {
             await this.pushChanges();
             await this.pullChanges();
+            console.log('[SyncManager] Sync completed successfully');
         } catch (error) {
-            console.error('Sync error:', error);
+            console.error('[SyncManager] Sync error:', error);
+            this.lastError = error instanceof Error ? error.message : 'Sync failed';
         } finally {
             this.syncInProgress = false;
         }
@@ -60,16 +129,35 @@ class SyncManager {
 
     private async pushChanges() {
         const ops = await localDb.syncQueue.orderBy('timestamp').toArray();
+        console.log(`[SyncManager] Pushing ${ops.length} operations...`);
+        
+        let successCount = 0;
+        let failCount = 0;
+        
         for (const op of ops) {
             try {
                 let error;
+                console.log(`[SyncManager] Processing: ${op.action} on ${op.table} (${op.entityId})`);
+                
                 if (op.action === 'create' || op.action === 'update') {
                     const dbData = this.mapToRemote(op.table, op.data);
-                    // On inclut l'ID car upsert en a besoin pour identifier l'enregistrement
-                    const { error: upsertError } = await supabase.from(op.table).upsert({ ...dbData, id: op.entityId });
+                    console.log(`[SyncManager] Data to send:`, dbData);
+                    
+                    const { error: upsertError, data } = await supabase
+                        .from(op.table)
+                        .upsert({ ...dbData, id: op.entityId })
+                        .select();
+                    
                     error = upsertError;
+                    
+                    if (data) {
+                        console.log(`[SyncManager] ✓ Upserted successfully:`, data);
+                    }
                 } else if (op.action === 'delete') {
-                    const { error: deleteError } = await supabase.from(op.table).delete().eq('id', op.entityId);
+                    const { error: deleteError } = await supabase
+                        .from(op.table)
+                        .delete()
+                        .eq('id', op.entityId);
                     error = deleteError;
                 }
 
@@ -80,16 +168,34 @@ class SyncManager {
                     if (table && op.action !== 'delete') {
                         await table.update(op.entityId, { _synced: true });
                     }
+                    successCount++;
+                    console.log(`[SyncManager] ✓ Operation ${op.id} completed`);
                 } else {
-                    console.error(`Error pushing change to ${op.table}:`, error);
+                    failCount++;
+                    console.error(`[SyncManager] ✗ Error on ${op.table}:`, error.message, error.details);
+                    this.lastError = `${op.table}: ${error.message}`;
+                    
+                    // Incrémenter le retry count
+                    await localDb.syncQueue.update(op.id!, { retryCount: (op.retryCount || 0) + 1 });
+                    
+                    // Si trop de retry, abandonner cette opération
+                    if ((op.retryCount || 0) >= 5) {
+                        console.error(`[SyncManager] Abandoning operation after 5 retries:`, op);
+                        await localDb.syncQueue.delete(op.id!);
+                    }
                 }
             } catch (err) {
-                console.error(`Failed to push operation ${op.id}:`, err);
+                failCount++;
+                console.error(`[SyncManager] ✗ Exception for operation ${op.id}:`, err);
             }
         }
+        
+        console.log(`[SyncManager] Push complete: ${successCount} success, ${failCount} failed`);
     }
 
     private async pullChanges() {
+        console.log('[SyncManager] Pulling remote changes...');
+        
         const tables = [
             { remote: 'rooms', local: 'rooms', mapper: mappers.mapRoomFromDB },
             { remote: 'room_categories', local: 'roomCategories', mapper: mappers.mapRoomCategoryFromDB },
@@ -103,26 +209,38 @@ class SyncManager {
 
         for (const t of tables) {
             try {
-                // Pour les réservations, on a besoin des services et paiements (logic complexe dans api.ts d'origine)
-                // Mais ici on simplifie en récupérant les données brutes. 
-                // Idéalement on devrait faire des jointures ou des fetchs séparés.
                 const { data, error } = await supabase.from(t.remote).select('*');
                 
-                if (!error && data) {
+                if (error) {
+                    console.error(`[SyncManager] ✗ Pull error for ${t.remote}:`, error.message);
+                    this.lastError = `Pull ${t.remote}: ${error.message}`;
+                    continue;
+                }
+                
+                if (data && data.length > 0) {
+                    console.log(`[SyncManager] ✓ Pulled ${data.length} records from ${t.remote}`);
                     const localTable = (localDb as any)[t.local];
                     for (const item of data) {
-                        const frontendItem = t.mapper(item);
-                        await localTable.put({
-                            ...frontendItem,
-                            _synced: true,
-                            _lastModified: Date.now()
-                        });
+                        try {
+                            const frontendItem = t.mapper(item);
+                            await localTable.put({
+                                ...frontendItem,
+                                _synced: true,
+                                _lastModified: Date.now()
+                            });
+                        } catch (mapErr) {
+                            console.error(`[SyncManager] Mapping error for ${t.remote}:`, mapErr, item);
+                        }
                     }
+                } else {
+                    console.log(`[SyncManager] No data in ${t.remote}`);
                 }
             } catch (err) {
-                console.error(`Pull error for ${t.remote}:`, err);
+                console.error(`[SyncManager] ✗ Exception pulling ${t.remote}:`, err);
             }
         }
+        
+        console.log('[SyncManager] Pull complete');
     }
 
     private mapToRemote(table: string, data: any): any {
