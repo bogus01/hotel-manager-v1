@@ -301,8 +301,6 @@ export const deleteReservation = async (id: string): Promise<void> => {
 
 export const resetPlanningData = async (): Promise<void> => {
     // Delete in order to respect potential foreign key constraints
-    // although Supabase usually handles cascade if configured, 
-    // we do it explicitly to be sure.
     const { error: servicesError } = await supabase.from('services').delete().neq('id', '00000000-0000-0000-0000-000000000000');
     if (servicesError) throw servicesError;
 
@@ -311,9 +309,6 @@ export const resetPlanningData = async (): Promise<void> => {
 
     const { error: reservationsError } = await supabase.from('reservations').delete().neq('id', '00000000-0000-0000-0000-000000000000');
     if (reservationsError) throw reservationsError;
-
-    const { error: clientsError } = await supabase.from('clients').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-    if (clientsError) throw clientsError;
 };
 
 export const updateReservationDate = async (id: string, checkIn: Date, checkOut: Date, roomId: string): Promise<void> => {
