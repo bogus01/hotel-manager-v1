@@ -199,11 +199,33 @@ class SyncManager {
     private async pullChanges() {
         console.log('[SyncManager] Pulling remote changes...');
         
+        // Vérifier s'il y a un reset en attente (fait hors ligne)
+        const pendingResetSetting = await localDb.settings.get('pendingReset');
+        const hasPendingReset = pendingResetSetting?.value === true;
+        
+        if (hasPendingReset) {
+            console.log('[SyncManager] Reset en attente détecté - vérification des suppressions...');
+            
+            // Vérifier s'il reste des opérations de suppression dans la queue
+            const pendingDeletes = await localDb.syncQueue
+                .where('table').equals('reservations')
+                .and(op => op.action === 'delete')
+                .count();
+            
+            if (pendingDeletes > 0) {
+                console.log(`[SyncManager] ${pendingDeletes} suppressions encore en attente - skip pull des réservations`);
+            } else {
+                // Toutes les suppressions ont été traitées, retirer le flag
+                await localDb.settings.delete('pendingReset');
+                console.log('[SyncManager] Reset terminé - flag supprimé');
+            }
+        }
+        
         const tables = [
             { remote: 'rooms', local: 'rooms', mapper: mappers.mapRoomFromDB },
             { remote: 'room_categories', local: 'roomCategories', mapper: mappers.mapRoomCategoryFromDB },
             { remote: 'clients', local: 'clients', mapper: mappers.mapClientFromDB },
-            { remote: 'reservations', local: 'reservations', mapper: (row: any) => mappers.mapReservationFromDB(row, row.services || [], row.payments || []) },
+            { remote: 'reservations', local: 'reservations', mapper: (row: any) => mappers.mapReservationFromDB(row, row.services || [], row.payments || []), skipIfPendingReset: true },
             { remote: 'taxes', local: 'taxes', mapper: mappers.mapTaxFromDB },
             { remote: 'payment_methods', local: 'paymentMethods', mapper: mappers.mapPaymentMethodFromDB },
             { remote: 'service_catalog', local: 'serviceCatalog', mapper: mappers.mapServiceCatalogFromDB },
@@ -211,6 +233,12 @@ class SyncManager {
         ];
 
         for (const t of tables) {
+            // Skip les réservations si un reset est en attente
+            if ((t as any).skipIfPendingReset && hasPendingReset) {
+                console.log(`[SyncManager] Skip pull pour ${t.remote} (reset en attente)`);
+                continue;
+            }
+            
             try {
                 const { data, error } = await supabase.from(t.remote).select('*');
                 

@@ -191,64 +191,73 @@ export const updateMultipleReservations = async (updatedList: Reservation[]): Pr
 export const resetPlanningData = async (): Promise<void> => {
     console.log('[Reset] Début du reset des données...');
     
-    // Effacer localement d'abord
-    await localDb.reservations.clear();
-    await localDb.syncQueue.clear(); // Vider complètement la queue de sync
+    const isOnline = syncManager.getStatus();
+    console.log(`[Reset] Mode: ${isOnline ? 'EN LIGNE' : 'HORS LIGNE'}`);
     
-    console.log('[Reset] Données locales effacées');
+    // 1. Récupérer tous les IDs des réservations LOCALES avant de les effacer
+    const localReservations = await localDb.reservations.toArray();
+    const localIds = localReservations.map(r => r.id);
+    console.log(`[Reset] ${localIds.length} réservations locales trouvées`);
     
-    // Supprimer directement dans Supabase
-    try {
-        const { supabase } = await import('./supabase');
-        
-        // 1. Récupérer tous les IDs des réservations depuis Supabase
-        const { data: reservations, error: fetchError } = await supabase
-            .from('reservations')
-            .select('id');
-        
-        if (fetchError) {
-            console.error('[Reset] Erreur lors de la récupération des réservations:', fetchError);
-            return;
-        }
-        
-        if (!reservations || reservations.length === 0) {
-            console.log('[Reset] Aucune réservation à supprimer dans Supabase');
-            return;
-        }
-        
-        console.log(`[Reset] ${reservations.length} réservations trouvées dans Supabase`);
-        
-        // 2. Supprimer les paiements liés (si la table existe)
-        for (const res of reservations) {
-            try {
-                await supabase.from('reservation_payments').delete().eq('reservation_id', res.id);
-            } catch (e) { /* table peut ne pas exister */ }
+    // 2. Nettoyer les anciennes opérations de sync (sauf les delete qu'on va ajouter)
+    await localDb.syncQueue.clear();
+    
+    if (isOnline) {
+        // === MODE EN LIGNE ===
+        // Supprimer directement dans Supabase
+        try {
+            const { supabase } = await import('./supabase');
             
-            try {
-                await supabase.from('reservation_services').delete().eq('reservation_id', res.id);
-            } catch (e) { /* table peut ne pas exister */ }
-        }
-        
-        // 3. Supprimer chaque réservation une par une
-        let deletedCount = 0;
-        for (const res of reservations) {
-            const { error: deleteError } = await supabase
+            // Récupérer aussi les IDs depuis Supabase (peut avoir des données non synchronisées)
+            const { data: remoteReservations } = await supabase
                 .from('reservations')
-                .delete()
-                .eq('id', res.id);
+                .select('id');
             
-            if (deleteError) {
-                console.error(`[Reset] Erreur suppression ${res.id}:`, deleteError.message);
-            } else {
-                deletedCount++;
+            const remoteIds = remoteReservations?.map(r => r.id) || [];
+            
+            // Combiner les IDs locaux et distants (sans doublons)
+            const allIds = [...new Set([...localIds, ...remoteIds])];
+            console.log(`[Reset] ${allIds.length} réservations à supprimer au total`);
+            
+            if (allIds.length > 0) {
+                // Supprimer chaque réservation dans Supabase
+                let deletedCount = 0;
+                for (const id of allIds) {
+                    const { error } = await supabase
+                        .from('reservations')
+                        .delete()
+                        .eq('id', id);
+                    
+                    if (!error) deletedCount++;
+                }
+                console.log(`[Reset] ✓ ${deletedCount}/${allIds.length} supprimées de Supabase`);
             }
+        } catch (err) {
+            console.error('[Reset] Erreur Supabase:', err);
+        }
+    } else {
+        // === MODE HORS LIGNE ===
+        // Ajouter des opérations de suppression dans la queue pour synchronisation ultérieure
+        console.log('[Reset] Mode hors ligne - Mise en queue des suppressions...');
+        
+        for (const id of localIds) {
+            await syncManager.queueOperation({
+                action: 'delete',
+                table: 'reservations',
+                entityId: id,
+                data: null
+            });
         }
         
-        console.log(`[Reset] ✓ ${deletedCount}/${reservations.length} réservations supprimées de Supabase`);
+        // Marquer qu'un reset a été fait hors ligne (pour éviter le pull au retour)
+        await localDb.settings.put({ key: 'pendingReset', value: true });
         
-    } catch (err) {
-        console.error('[Reset] Erreur lors de la suppression dans Supabase:', err);
+        console.log(`[Reset] ${localIds.length} suppressions mises en queue`);
     }
+    
+    // 3. Effacer les données locales
+    await localDb.reservations.clear();
+    console.log('[Reset] ✓ Données locales effacées');
 };
 
 // SERVICES ET PAIEMENTS
