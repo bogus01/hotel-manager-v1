@@ -2,6 +2,7 @@
 import { supabase } from './supabase';
 import { localDb } from './localDb';
 import { SyncOperation } from '../types';
+import * as mappers from './mappers';
 
 class SyncManager {
     private isOnline: boolean = navigator.onLine;
@@ -63,7 +64,9 @@ class SyncManager {
             try {
                 let error;
                 if (op.action === 'create' || op.action === 'update') {
-                    const { error: upsertError } = await supabase.from(op.table).upsert(op.data);
+                    const dbData = this.mapToRemote(op.table, op.data);
+                    // On inclut l'ID car upsert en a besoin pour identifier l'enregistrement
+                    const { error: upsertError } = await supabase.from(op.table).upsert({ ...dbData, id: op.entityId });
                     error = upsertError;
                 } else if (op.action === 'delete') {
                     const { error: deleteError } = await supabase.from(op.table).delete().eq('id', op.entityId);
@@ -72,14 +75,13 @@ class SyncManager {
 
                 if (!error) {
                     await localDb.syncQueue.delete(op.id!);
-                    // Mettre à jour le flag _synced localement
-                    const table = (localDb as any)[this.mapTableToDb(op.table)];
-                    if (table) {
+                    const tableKey = this.mapTableToDb(op.table);
+                    const table = (localDb as any)[tableKey];
+                    if (table && op.action !== 'delete') {
                         await table.update(op.entityId, { _synced: true });
                     }
                 } else {
                     console.error(`Error pushing change to ${op.table}:`, error);
-                    // On pourrait implémenter un retry count ici
                 }
             } catch (err) {
                 console.error(`Failed to push operation ${op.id}:`, err);
@@ -88,32 +90,52 @@ class SyncManager {
     }
 
     private async pullChanges() {
-        // Liste des tables à synchroniser
         const tables = [
-            { remote: 'rooms', local: 'rooms' },
-            { remote: 'room_categories', local: 'roomCategories' },
-            { remote: 'clients', local: 'clients' },
-            { remote: 'reservations', local: 'reservations' },
-            { remote: 'taxes', local: 'taxes' },
-            { remote: 'payment_methods', local: 'paymentMethods' },
-            { remote: 'service_catalog', local: 'serviceCatalog' },
-            { remote: 'users', local: 'users' }
+            { remote: 'rooms', local: 'rooms', mapper: mappers.mapRoomFromDB },
+            { remote: 'room_categories', local: 'roomCategories', mapper: mappers.mapRoomCategoryFromDB },
+            { remote: 'clients', local: 'clients', mapper: mappers.mapClientFromDB },
+            { remote: 'reservations', local: 'reservations', mapper: (row: any) => mappers.mapReservationFromDB(row, row.services || [], row.payments || []) },
+            { remote: 'taxes', local: 'taxes', mapper: mappers.mapTaxFromDB },
+            { remote: 'payment_methods', local: 'paymentMethods', mapper: mappers.mapPaymentMethodFromDB },
+            { remote: 'service_catalog', local: 'serviceCatalog', mapper: mappers.mapServiceCatalogFromDB },
+            { remote: 'users', local: 'users', mapper: mappers.mapUserFromDB }
         ];
 
         for (const t of tables) {
-            const { data, error } = await supabase.from(t.remote).select('*');
-            if (!error && data) {
-                const localTable = (localDb as any)[t.local];
-                for (const item of data) {
-                    // On mappe les données si nécessaire (ici on assume que localDb attend les données brutes de Supabase mappées ensuite par hybridApi)
-                    // Note: Il faudra s'assurer que les données distantes sont compatibles avec le schéma local
-                    await localTable.put({
-                        ...this.mapFromRemote(t.remote, item),
-                        _synced: true,
-                        _lastModified: Date.now()
-                    });
+            try {
+                // Pour les réservations, on a besoin des services et paiements (logic complexe dans api.ts d'origine)
+                // Mais ici on simplifie en récupérant les données brutes. 
+                // Idéalement on devrait faire des jointures ou des fetchs séparés.
+                const { data, error } = await supabase.from(t.remote).select('*');
+                
+                if (!error && data) {
+                    const localTable = (localDb as any)[t.local];
+                    for (const item of data) {
+                        const frontendItem = t.mapper(item);
+                        await localTable.put({
+                            ...frontendItem,
+                            _synced: true,
+                            _lastModified: Date.now()
+                        });
+                    }
                 }
+            } catch (err) {
+                console.error(`Pull error for ${t.remote}:`, err);
             }
+        }
+    }
+
+    private mapToRemote(table: string, data: any): any {
+        switch (table) {
+            case 'rooms': return mappers.mapRoomToDB(data);
+            case 'room_categories': return mappers.mapRoomCategoryToDB(data);
+            case 'clients': return mappers.mapClientToDB(data);
+            case 'reservations': return mappers.mapReservationToDB(data);
+            case 'taxes': return mappers.mapTaxToDB(data);
+            case 'payment_methods': return mappers.mapPaymentMethodToDB(data);
+            case 'service_catalog': return mappers.mapServiceCatalogToDB(data);
+            case 'users': return mappers.mapUserToDB(data);
+            default: return data;
         }
     }
 
@@ -130,14 +152,6 @@ class SyncManager {
         };
         return mapping[remoteTable] || remoteTable;
     }
-
-    private mapFromRemote(table: string, data: any): any {
-        // Si besoin de mapping spécifique entre Supabase (snake_case) et Typescript (camelCase)
-        // Mais comme localDb utilise les types exportés qui sont camelCase, 
-        // il faut s'assurer du mapping correct via mappers.ts
-        return data; // Simplifié pour l'instant, hybridApi gérera le mapping via mappers.ts
-    }
 }
 
 export const syncManager = new SyncManager();
-

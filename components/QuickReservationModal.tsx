@@ -200,45 +200,50 @@ const QuickReservationModal: React.FC<QuickReservationModalProps> = ({ isOpen, o
   const handleSubmit = async (status: ReservationStatus, mode: 'normal' | 'proforma' = 'normal') => {
     setError(null);
     
-    if (hasCollision) {
-        setError("Impossible de valider : certaines chambres sélectionnées ne sont plus disponibles pour ces dates.");
-        return;
-    }
+    try {
+        if (hasCollision) {
+            setError("Impossible de valider : certaines chambres sélectionnées ne sont plus disponibles pour ces dates.");
+            return;
+        }
 
-    let finalClient = selectedClient;
-    if (isCreatingClient) {
-        if (newClient.isCompany && !newClient.company) { setError("Société requise."); return; }
-        if (!newClient.isCompany && !newClient.lastName) { setError("Nom requis."); return; }
-        finalClient = await api.createClient({ ...newClient, civility: 'M.', balance: 0, isAccountHolder: false });
-    }
-    
-    if (!finalClient) { setError("Client obligatoire."); return; }
-    if (selectedRoomIds.length === 0) { setError("Sélectionnez une chambre."); return; }
-    if (totalPax > maxAllowedPax) { setError(`Capacité insuffisante (${totalPax} hôtes pour ${maxAllowedPax} places).`); return; }
+        let finalClient = selectedClient;
+        if (isCreatingClient) {
+            if (newClient.isCompany && !newClient.company) { setError("Société requise."); return; }
+            if (!newClient.isCompany && !newClient.lastName) { setError("Nom requis."); return; }
+            finalClient = await api.createClient({ ...newClient, civility: 'M.', balance: 0, isAccountHolder: false });
+        }
+        
+        if (!finalClient) { setError("Client obligatoire."); return; }
+        if (selectedRoomIds.length === 0) { setError("Sélectionnez une chambre."); return; }
+        if (totalPax > maxAllowedPax) { setError(`Capacité insuffisante (${totalPax} hôtes pour ${maxAllowedPax} places).`); return; }
 
-    const boardP = (boardPrices && boardType !== BoardType.RO) ? (boardPrices[boardType as keyof BoardConfiguration] || 0) : 0;
-    let remainingPax = totalPax;
-    const newResList = selectedRoomIds.map(roomId => {
-      const room = rooms.find(r => r.id === roomId)!;
-      const roomPax = Math.min(remainingPax, room.capacity);
-      remainingPax = Math.max(0, remainingPax - roomPax);
-      return {
-        roomId, clientId: finalClient!.id, clientName: finalClient!.company || `${finalClient!.firstName} ${finalClient!.lastName}`, occupantName: finalClient!.company || `${finalClient!.firstName} ${finalClient!.lastName}`,
-        checkIn: startDate, checkOut: endDate, status, source: ReservationSource.DIRECT, boardType, adults: roomPax, children: 0,
-        baseRate: room.baseRate, totalPrice: (room.baseRate + (boardP * roomPax)) * nights, services: [],
-        payments: depositAmount > 0 ? [{ id: `dep-${Date.now()}`, amount: depositAmount / selectedRoomIds.length, date: new Date(), method: paymentMethod }] : [],
-        depositAmount: depositAmount / selectedRoomIds.length, notes, color: customColor
-      };
-    });
-    
-    const created = await api.createMultipleReservations(newResList);
-    
-    if (mode === 'proforma') {
-        setNewlyCreatedGroup(created);
-        setShowProformaPreview(created[0]);
-    } else {
-        onSuccess(created[0], false); 
-        onClose();
+        const boardP = (boardPrices && boardType !== BoardType.RO) ? (boardPrices[boardType as keyof BoardConfiguration] || 0) : 0;
+        let remainingPax = totalPax;
+        const newResList = selectedRoomIds.map(roomId => {
+          const room = rooms.find(r => r.id === roomId)!;
+          const roomPax = Math.min(remainingPax, room.capacity);
+          remainingPax = Math.max(0, remainingPax - roomPax);
+          return {
+            roomId, clientId: finalClient!.id, clientName: finalClient!.company || `${finalClient!.firstName} ${finalClient!.lastName}`, occupantName: finalClient!.company || `${finalClient!.firstName} ${finalClient!.lastName}`,
+            checkIn: startDate, checkOut: endDate, status, source: ReservationSource.DIRECT, boardType, adults: roomPax, children: 0,
+            baseRate: room.baseRate, totalPrice: (room.baseRate + (boardP * roomPax)) * nights, services: [],
+            payments: depositAmount > 0 ? [{ id: `dep-${Date.now()}`, amount: depositAmount / selectedRoomIds.length, date: new Date(), method: paymentMethod }] : [],
+            depositAmount: depositAmount / selectedRoomIds.length, notes, color: customColor
+          };
+        });
+        
+        const created = await api.createMultipleReservations(newResList);
+        
+        if (mode === 'proforma') {
+            setNewlyCreatedGroup(created);
+            setShowProformaPreview(created[0]);
+        } else {
+            onSuccess(created[0], false); 
+            onClose();
+        }
+    } catch (err) {
+        console.error("Erreur lors de la création de la réservation:", err);
+        setError("Une erreur technique est survenue lors de la création.");
     }
   };
 

@@ -236,44 +236,54 @@ const NewReservationModal: React.FC<NewReservationModalProps> = ({ isOpen, onClo
   };
 
   const handleSubmit = async () => {
-    let clientId = selectedClient?.id;
-    let clientName = selectedClient?.company || `${selectedClient?.firstName} ${selectedClient?.lastName}`;
-    if (isNewClientFormVisible) {
-      const created = await api.createClient(newClientData);
-      clientId = created.id;
-      clientName = created.company || `${created.firstName} ${created.lastName}`;
+    try {
+        setError(null);
+        let clientId = selectedClient?.id;
+        let clientName = selectedClient?.company || `${selectedClient?.firstName} ${selectedClient?.lastName}`;
+        if (isNewClientFormVisible) {
+          const created = await api.createClient(newClientData);
+          clientId = created.id;
+          clientName = created.company || `${created.firstName} ${created.lastName}`;
+        }
+
+        if (!clientId) {
+            setError("Veuillez sélectionner ou créer un client.");
+            return;
+        }
+
+        let remainingGuests = guests;
+        const activeFixedTaxes = availableTaxes.filter(t => t.isActive && t.isFixed && (t.applyTo === 'accommodation' || t.applyTo === 'all'));
+        const fixedTaxPerNightPerPax = activeFixedTaxes.reduce((sum, t) => sum + t.rate, 0);
+
+        const newResList = selectedRoomIds.map(roomId => {
+          const room = rooms.find(r => r.id === roomId)!;
+          const guestsAllocated = Math.min(remainingGuests, room.capacity);
+          const nightly = getRoomPrice(room);
+          remainingGuests = Math.max(0, remainingGuests - guestsAllocated);
+          const perRoomDeposit = depositAmount / selectedRoomIds.length;
+
+          const baseStay = (nightly + ((boardPrices?.[boardType as keyof BoardConfiguration] || 0) * guestsAllocated)) * nights;
+          const totalTaxesFixes = fixedTaxPerNightPerPax * guestsAllocated * nights;
+
+          return {
+            roomId, clientId: clientId!, clientName, occupantName: clientName,
+            checkIn: startDate!, checkOut: endDate!,
+            status: currentStatus, source, boardType, adults: guestsAllocated, children: 0,
+            baseRate: nightly, totalPrice: baseStay + totalTaxesFixes,
+            notes, services: [], 
+            payments: perRoomDeposit > 0 ? [{ id: `dep-${Date.now()}`, amount: perRoomDeposit, date: new Date(), method: paymentMethod }] : [], 
+            depositAmount: perRoomDeposit,
+            color: customColor 
+          };
+        });
+
+        await api.createMultipleReservations(newResList);
+        onSuccess();
+        onClose();
+    } catch (err) {
+        console.error("Erreur lors de la création du dossier:", err);
+        setError("Une erreur technique est survenue lors de l'enregistrement.");
     }
-
-    let remainingGuests = guests;
-    const activeFixedTaxes = availableTaxes.filter(t => t.isActive && t.isFixed && (t.applyTo === 'accommodation' || t.applyTo === 'all'));
-    const fixedTaxPerNightPerPax = activeFixedTaxes.reduce((sum, t) => sum + t.rate, 0);
-
-    const newResList = selectedRoomIds.map(roomId => {
-      const room = rooms.find(r => r.id === roomId)!;
-      const guestsAllocated = Math.min(remainingGuests, room.capacity);
-      const nightly = getRoomPrice(room);
-      remainingGuests = Math.max(0, remainingGuests - guestsAllocated);
-      const perRoomDeposit = depositAmount / selectedRoomIds.length;
-
-      // Calcul du total réel incluant les taxes fixes paramétrées
-      const baseStay = (nightly + ((boardPrices?.[boardType as keyof BoardConfiguration] || 0) * guestsAllocated)) * nights;
-      const totalTaxesFixes = fixedTaxPerNightPerPax * guestsAllocated * nights;
-
-      return {
-        roomId, clientId: clientId!, clientName, occupantName: clientName,
-        checkIn: startDate!, checkOut: endDate!,
-        status: currentStatus, source, boardType, adults: guestsAllocated, children: 0,
-        baseRate: nightly, totalPrice: baseStay + totalTaxesFixes,
-        notes, services: [], 
-        payments: perRoomDeposit > 0 ? [{ id: `dep-${Date.now()}`, amount: perRoomDeposit, date: new Date(), method: paymentMethod }] : [], 
-        depositAmount: perRoomDeposit,
-        color: customColor 
-      };
-    });
-
-    await api.createMultipleReservations(newResList);
-    onSuccess();
-    onClose();
   };
 
   if (!isOpen) return null;

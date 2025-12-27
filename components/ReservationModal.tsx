@@ -456,11 +456,14 @@ const ReservationModal: React.FC<ReservationModalProps> = ({ reservation, allRes
         return;
     }
     setIsProcessing(true);
+    setErrorMessage(null); // Reset error
     try {
-        const success = await onSave({ ...formData });
-        if (success) { onClose(); } else { setErrorMessage("Erreur lors de la sauvegarde."); }
+        await api.updateReservation(formData);
+        await onSave(formData);
+        onClose();
     } catch (e) {
-        setErrorMessage("Erreur de connexion.");
+        console.error("Save error:", e);
+        setErrorMessage("Erreur de connexion ou de base de données locale.");
     } finally {
         setIsProcessing(false);
     }
