@@ -193,7 +193,6 @@ export const resetPlanningData = async (): Promise<void> => {
     
     // Effacer localement d'abord
     await localDb.reservations.clear();
-    await localDb.payments.clear();
     await localDb.syncQueue.clear(); // Vider complètement la queue de sync
     
     console.log('[Reset] Données locales effacées');
