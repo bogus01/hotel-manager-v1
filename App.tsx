@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { CurrencyProvider } from './context/CurrencyContext';
 import Home from './pages/Home';
 import Dashboard from './pages/Dashboard';
 import Planning from './pages/Planning';
@@ -32,7 +33,7 @@ const App: React.FC = () => {
     conflictResolver.setConflictListener((data) => {
       setConflictData(data);
     });
-    
+
     // Démarrer la synchronisation initiale
     syncManager.sync();
   }, []);
@@ -44,7 +45,7 @@ const App: React.FC = () => {
   };
 
   return (
-    <>
+    <CurrencyProvider>
       <HashRouter>
         <Routes>
           <Route path="/" element={<Home />} />
@@ -71,15 +72,15 @@ const App: React.FC = () => {
       </HashRouter>
 
       {conflictData && (
-        <ConflictModal 
-          conflictData={conflictData} 
-          onResolve={handleResolveConflict} 
-          onClose={() => setConflictData(null)} 
+        <ConflictModal
+          conflictData={conflictData}
+          onResolve={handleResolveConflict}
+          onClose={() => setConflictData(null)}
         />
       )}
-      
+
       <SyncNotification onShowConflict={setConflictData} />
-    </>
+    </CurrencyProvider>
   );
 };
 

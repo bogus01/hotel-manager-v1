@@ -15,13 +15,13 @@ class SyncManager {
         // Écouter les événements réseau comme indicateurs initiaux
         window.addEventListener('online', () => this.checkConnection());
         window.addEventListener('offline', () => this.setOnlineStatus(false));
-        
+
         // Nettoyage initial des opérations invalides
         this.cleanInvalidOperations();
-        
+
         // Vérification initiale
         this.checkConnection();
-        
+
         // Vérification périodique toutes les 30 secondes
         this.checkInterval = window.setInterval(() => this.checkConnection(), 30000);
     }
@@ -36,14 +36,14 @@ class SyncManager {
         try {
             // Ping réel vers Supabase - requête légère
             const { error } = await supabase.from('rooms').select('id').limit(1);
-            
+
             if (error) {
                 console.warn('[SyncManager] Supabase error:', error.message);
                 this.lastError = error.message;
                 this.setOnlineStatus(false);
                 return false;
             }
-            
+
             this.lastError = null;
             this.setOnlineStatus(true);
             return true;
@@ -60,7 +60,7 @@ class SyncManager {
             console.log(`[SyncManager] Status changed: ${online ? 'ONLINE' : 'OFFLINE'}`);
             this.isOnline = online;
             this.listeners.forEach(l => l(online));
-            
+
             if (online) {
                 this.sync();
             }
@@ -95,7 +95,7 @@ class SyncManager {
             timestamp: Date.now(),
             retryCount: 0
         });
-        
+
         // Tenter la synchronisation si on pense être en ligne
         if (this.isOnline) {
             this.sync();
@@ -107,7 +107,7 @@ class SyncManager {
             console.log('[SyncManager] Sync already in progress, skipping');
             return;
         }
-        
+
         // Vérifier d'abord la connexion réelle
         const isReallyOnline = await this.checkConnection();
         if (!isReallyOnline) {
@@ -133,34 +133,42 @@ class SyncManager {
     private async pushChanges() {
         const ops = await localDb.syncQueue.orderBy('timestamp').toArray();
         console.log(`[SyncManager] Pushing ${ops.length} operations...`);
-        
+
         let successCount = 0;
         let failCount = 0;
-        
+
         for (const op of ops) {
             try {
                 let error;
+                let data;
                 console.log(`[SyncManager] Processing: ${op.action} on ${op.table} (${op.entityId})`);
-                
+
                 if (op.action === 'create' || op.action === 'update') {
-                    const dbData = this.mapToRemote(op.table, op.data);
+                    let dbData = this.mapToRemote(op.table, op.data);
                     console.log(`[SyncManager] Data to send:`, dbData);
-                    
-                    const { error: upsertError, data } = await supabase
-                        .from(op.table)
-                        .upsert({ ...dbData, id: op.entityId })
-                        .select();
-                    
-                    error = upsertError;
-                    
-                    if (data) {
-                        console.log(`[SyncManager] ✓ Upserted successfully:`, data);
+
+                    // Gérer le cas particulier des settings qui utilisent 'key' comme PK
+                    if (op.table === 'settings') {
+                        const { error: upsertError, data: upsertData } = await supabase
+                            .from(op.table)
+                            .upsert({ key: op.entityId, value: op.data, updated_at: new Date().toISOString() })
+                            .select();
+                        error = upsertError;
+                        data = upsertData;
+                    } else {
+                        const { error: upsertError, data: upsertData } = await supabase
+                            .from(op.table)
+                            .upsert({ ...dbData, id: op.entityId })
+                            .select();
+                        error = upsertError;
+                        data = upsertData;
                     }
                 } else if (op.action === 'delete') {
+                    const pkField = op.table === 'settings' ? 'key' : 'id';
                     const { error: deleteError } = await supabase
                         .from(op.table)
                         .delete()
-                        .eq('id', op.entityId);
+                        .eq(pkField, op.entityId);
                     error = deleteError;
                 }
 
@@ -175,16 +183,28 @@ class SyncManager {
                     console.log(`[SyncManager] ✓ Operation ${op.id} completed`);
                 } else {
                     failCount++;
-                    console.error(`[SyncManager] ✗ Error on ${op.table}:`, error.message, error.details);
-                    this.lastError = `${op.table}: ${error.message}`;
-                    
-                    // Incrémenter le retry count
-                    await localDb.syncQueue.update(op.id!, { retryCount: (op.retryCount || 0) + 1 });
-                    
-                    // Si trop de retry, abandonner cette opération
-                    if ((op.retryCount || 0) >= 5) {
-                        console.error(`[SyncManager] Abandoning operation after 5 retries:`, op);
+                    const errorCode = (error as any).code || (error as any).status;
+                    const errorMessage = error.message || '';
+                    console.error(`[SyncManager] ✗ Error on ${op.table} (Code: ${errorCode}):`, errorMessage, error.details);
+                    this.lastError = `${op.table}: ${errorMessage}`;
+
+                    // Gérer les erreurs fatales qui ne se résoudront pas par simple retry
+                    // 23505: unique violation, 23503: foreign key, 23502: not-null, P0001: raise exception
+                    const isConstraintViolation = ['23505', '23503', '23502', 'P0001'].includes(String(errorCode));
+                    const isValidationError = errorMessage.includes('violates') || errorMessage.includes('not-null') || errorMessage.includes('invalid input syntax');
+
+                    if (isConstraintViolation || isValidationError) {
+                        console.warn(`[SyncManager] Fatal error detected (${errorCode}). Abandoning operation ${op.id} to prevent sync blockage.`);
                         await localDb.syncQueue.delete(op.id!);
+                    } else {
+                        // Incrémenter le retry count pour les erreurs temporaires
+                        const currentRetry = (op.retryCount || 0) + 1;
+                        await localDb.syncQueue.update(op.id!, { retryCount: currentRetry });
+
+                        if (currentRetry >= 5) {
+                            console.error(`[SyncManager] Abandoning operation after 5 retries:`, op);
+                            await localDb.syncQueue.delete(op.id!);
+                        }
                     }
                 }
             } catch (err) {
@@ -192,26 +212,26 @@ class SyncManager {
                 console.error(`[SyncManager] ✗ Exception for operation ${op.id}:`, err);
             }
         }
-        
+
         console.log(`[SyncManager] Push complete: ${successCount} success, ${failCount} failed`);
     }
 
     private async pullChanges() {
         console.log('[SyncManager] Pulling remote changes...');
-        
+
         // Vérifier s'il y a un reset en attente (fait hors ligne)
         const pendingResetSetting = await localDb.settings.get('pendingReset');
         const hasPendingReset = pendingResetSetting?.value === true;
-        
+
         if (hasPendingReset) {
             console.log('[SyncManager] Reset en attente détecté - vérification des suppressions...');
-            
+
             // Vérifier s'il reste des opérations de suppression dans la queue
             const pendingDeletes = await localDb.syncQueue
                 .where('table').equals('reservations')
                 .and(op => op.action === 'delete')
                 .count();
-            
+
             if (pendingDeletes > 0) {
                 console.log(`[SyncManager] ${pendingDeletes} suppressions encore en attente - skip pull des réservations`);
             } else {
@@ -220,16 +240,27 @@ class SyncManager {
                 console.log('[SyncManager] Reset terminé - flag supprimé');
             }
         }
-        
+
         const tables = [
             { remote: 'rooms', local: 'rooms', mapper: mappers.mapRoomFromDB },
             { remote: 'room_categories', local: 'roomCategories', mapper: mappers.mapRoomCategoryFromDB },
             { remote: 'clients', local: 'clients', mapper: mappers.mapClientFromDB },
-            { remote: 'reservations', local: 'reservations', mapper: (row: any) => mappers.mapReservationFromDB(row, row.services || [], row.payments || []), skipIfPendingReset: true },
+            {
+                remote: 'reservations',
+                local: 'reservations',
+                mapper: (row: any) => mappers.mapReservationFromDB(
+                    row,
+                    (row.services || []).map(mappers.mapServiceFromDB),
+                    (row.payments || []).map(mappers.mapPaymentFromDB)
+                ),
+                skipIfPendingReset: true,
+                customSelect: '*, payments(*), services(*)'
+            },
             { remote: 'taxes', local: 'taxes', mapper: mappers.mapTaxFromDB },
             { remote: 'payment_methods', local: 'paymentMethods', mapper: mappers.mapPaymentMethodFromDB },
             { remote: 'service_catalog', local: 'serviceCatalog', mapper: mappers.mapServiceCatalogFromDB },
-            { remote: 'users', local: 'users', mapper: mappers.mapUserFromDB }
+            { remote: 'users', local: 'users', mapper: mappers.mapUserFromDB },
+            { remote: 'settings', local: 'settings', mapper: mappers.mapSettingsFromDB }
         ];
 
         for (const t of tables) {
@@ -238,16 +269,18 @@ class SyncManager {
                 console.log(`[SyncManager] Skip pull pour ${t.remote} (reset en attente)`);
                 continue;
             }
-            
+
             try {
-                const { data, error } = await supabase.from(t.remote).select('*');
-                
+                // Use custom select if defined, otherwise *
+                const selectQuery = (t as any).customSelect || '*';
+                const { data, error } = await supabase.from(t.remote).select(selectQuery);
+
                 if (error) {
                     console.error(`[SyncManager] ✗ Pull error for ${t.remote}:`, error.message);
                     this.lastError = `Pull ${t.remote}: ${error.message}`;
                     continue;
                 }
-                
+
                 if (data && data.length > 0) {
                     console.log(`[SyncManager] ✓ Pulled ${data.length} records from ${t.remote}`);
                     const localTable = (localDb as any)[t.local];
@@ -270,7 +303,7 @@ class SyncManager {
                 console.error(`[SyncManager] ✗ Exception pulling ${t.remote}:`, err);
             }
         }
-        
+
         console.log('[SyncManager] Pull complete');
     }
 
@@ -280,7 +313,9 @@ class SyncManager {
             case 'room_categories': return mappers.mapRoomCategoryToDB(data);
             case 'clients': return mappers.mapClientToDB(data);
             case 'reservations': return mappers.mapReservationToDB(data);
+            case 'payments': return mappers.mapPaymentToDB(data, data.reservationId);
             case 'taxes': return mappers.mapTaxToDB(data);
+
             case 'payment_methods': return mappers.mapPaymentMethodToDB(data);
             case 'service_catalog': return mappers.mapServiceCatalogToDB(data);
             case 'users': return mappers.mapUserToDB(data);
@@ -306,7 +341,7 @@ class SyncManager {
     public async cleanInvalidOperations(): Promise<number> {
         const ops = await localDb.syncQueue.toArray();
         let cleanedCount = 0;
-        
+
         for (const op of ops) {
             // Supprimer les opérations avec des IDs invalides
             if (!op.entityId || op.entityId === '*' || op.entityId === '') {
@@ -315,11 +350,11 @@ class SyncManager {
                 console.log(`[SyncManager] Removed invalid operation: ${op.action} on ${op.table} with entityId: ${op.entityId}`);
             }
         }
-        
+
         if (cleanedCount > 0) {
             console.log(`[SyncManager] Cleaned ${cleanedCount} invalid operations from queue`);
         }
-        
+
         return cleanedCount;
     }
 

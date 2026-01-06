@@ -2,11 +2,11 @@
 import { localDb } from './localDb';
 import { syncManager } from './syncManager';
 import * as mappers from './mappers';
-import { 
-    Room, RoomCategory, Client, Reservation, Tax, PaymentMethod, 
+import {
+    Room, RoomCategory, Client, Reservation, Tax, PaymentMethod,
     ServiceCatalogItem, User, ReservationStatus, ServiceItem, Payment,
     CurrencySettings, BoardConfiguration, PlanningSettings, ModuleThemesMap,
-    BoardType, RoomStatus
+    BoardType, RoomStatus, HotelSettings
 } from '../types';
 
 // Helper pour générer des IDs robustes
@@ -139,8 +139,37 @@ export const fetchReservations = async (): Promise<Reservation[]> => {
 export const createReservation = async (res: Omit<Reservation, 'id'>): Promise<Reservation> => {
     const id = generateId();
     const newRes = { ...res, id } as Reservation;
+
+    // 1. Sauvegarde locale
     await localDb.reservations.add({ ...newRes, _synced: false, _lastModified: Date.now() });
+
+    // 2. Queue l'opération de création de la réservation
     await syncManager.queueOperation({ action: 'create', table: 'reservations', entityId: id, data: newRes });
+
+    // 3. Queue les règlements initiaux (ex: acompte) vers la table payments
+    if (newRes.payments && newRes.payments.length > 0) {
+        for (const p of newRes.payments) {
+            await syncManager.queueOperation({
+                action: 'create',
+                table: 'payments',
+                entityId: p.id,
+                data: { ...p, reservationId: id }
+            });
+        }
+    }
+
+    // 4. Queue les services initiaux vers la table services
+    if (newRes.services && newRes.services.length > 0) {
+        for (const s of newRes.services) {
+            await syncManager.queueOperation({
+                action: 'create',
+                table: 'services',
+                entityId: s.id,
+                data: { ...s, reservationId: id }
+            });
+        }
+    }
+
     return newRes;
 };
 
@@ -190,20 +219,20 @@ export const updateMultipleReservations = async (updatedList: Reservation[]): Pr
 
 export const resetPlanningData = async (): Promise<void> => {
     console.log('[Reset] Début du reset des données...');
-    
+
     // 1. Récupérer tous les IDs des réservations LOCALES avant de les effacer
     const localReservations = await localDb.reservations.toArray();
     const localIds = localReservations.map(r => r.id);
     console.log(`[Reset] ${localIds.length} réservations locales trouvées:`, localIds);
-    
+
     // 2. Vérifier VRAIMENT si on peut joindre Supabase (pas juste le status en cache)
     let canReachSupabase = false;
     let remoteIds: string[] = [];
-    
+
     try {
         const { supabase } = await import('./supabase');
         const { data, error } = await supabase.from('reservations').select('id');
-        
+
         if (!error) {
             canReachSupabase = true;
             remoteIds = data?.map(r => r.id) || [];
@@ -214,40 +243,40 @@ export const resetPlanningData = async (): Promise<void> => {
     } catch (err) {
         console.log('[Reset] ✗ Impossible de joindre Supabase:', err);
     }
-    
+
     // 3. Combiner les IDs locaux et distants (sans doublons)
     const allIds = [...new Set([...localIds, ...remoteIds])];
     console.log(`[Reset] Total: ${allIds.length} réservations à supprimer`);
-    
+
     // 4. Nettoyer la queue de sync existante
     await localDb.syncQueue.clear();
-    
+
     if (canReachSupabase && allIds.length > 0) {
         // === MODE EN LIGNE - Suppression directe ===
         console.log('[Reset] Mode EN LIGNE - Suppression directe dans Supabase...');
-        
+
         const { supabase } = await import('./supabase');
         let deletedCount = 0;
-        
+
         for (const id of allIds) {
             const { error } = await supabase
                 .from('reservations')
                 .delete()
                 .eq('id', id);
-            
+
             if (!error) {
                 deletedCount++;
             } else {
                 console.error(`[Reset] Erreur suppression ${id}:`, error.message);
             }
         }
-        
+
         console.log(`[Reset] ✓ ${deletedCount}/${allIds.length} supprimées de Supabase`);
-        
+
     } else if (allIds.length > 0) {
         // === MODE HORS LIGNE - Mise en queue ===
         console.log('[Reset] Mode HORS LIGNE - Mise en queue des suppressions...');
-        
+
         // IMPORTANT: Ajouter chaque suppression à la queue
         for (const id of allIds) {
             await localDb.syncQueue.add({
@@ -260,15 +289,15 @@ export const resetPlanningData = async (): Promise<void> => {
             });
             console.log(`[Reset] Queued delete for: ${id}`);
         }
-        
+
         // Marquer qu'un reset a été fait hors ligne
         await localDb.settings.put({ key: 'pendingReset', value: true });
-        
+
         // Vérifier que les opérations sont bien dans la queue
         const queueCount = await localDb.syncQueue.count();
         console.log(`[Reset] ✓ ${queueCount} opérations dans la queue de sync`);
     }
-    
+
     // 5. Effacer les données locales
     await localDb.reservations.clear();
     console.log('[Reset] ✓ Données locales effacées');
@@ -282,24 +311,71 @@ export const addServiceToReservation = async (id: string, service: ServiceItem):
         const newTotal = Number(res.totalPrice) + (service.price * service.quantity);
         const updated = { ...res, services: newServices, totalPrice: newTotal };
         await localDb.reservations.put({ ...updated, _synced: false, _lastModified: Date.now() });
+        // Mise à jour de la réservation (pour le prix total)
         await syncManager.queueOperation({ action: 'update', table: 'reservations', entityId: id, data: updated });
+
+        // Création du service dans la table dédiée (crucial pour la persistance)
+        await syncManager.queueOperation({
+            action: 'create',
+            table: 'services',
+            entityId: service.id,
+            data: { ...service, reservationId: id }
+        });
     }
 };
 
-export const addPaymentToReservation = async (id: string, payment: Payment): Promise<void> => {
+export const addPaymentToReservation = async (id: string, payment: Payment): Promise<boolean> => {
     const res = await localDb.reservations.get(id);
-    if (res) {
-        const newPayments = [...(res.payments || []), payment];
-        const updated = { ...res, payments: newPayments };
+    if (!res) {
+        console.error(`[addPaymentToReservation] Réservation non trouvée: ${id}`);
+        return false;
+    }
+
+    // Ensure payment amount is a proper number
+    const sanitizedPayment: Payment = {
+        ...payment,
+        amount: Number(payment.amount) || 0
+    };
+
+    // Ensure payments array exists
+    const currentPayments = Array.isArray(res.payments) ? res.payments : [];
+    const newPayments = [...currentPayments, sanitizedPayment];
+    const updated = { ...res, payments: newPayments };
+
+    try {
         await localDb.reservations.put({ ...updated, _synced: false, _lastModified: Date.now() });
+        // Queue reservation update (for consistency)
         await syncManager.queueOperation({ action: 'update', table: 'reservations', entityId: id, data: updated });
+
+        // Queue payment CREATION (critical for persistence if using relational tables)
+        await syncManager.queueOperation({
+            action: 'create',
+            table: 'payments',
+            entityId: payment.id,
+            data: { ...sanitizedPayment, reservationId: id }
+        });
+
+        console.log(`[addPaymentToReservation] Paiement ajouté: ${sanitizedPayment.amount} pour réservation ${id}`);
+        return true;
+    } catch (error) {
+        console.error(`[addPaymentToReservation] Erreur:`, error);
+        return false;
     }
 };
 
-export const deletePayment = async (id: string): Promise<void> => {
-    // Note: Dans cette implémentation, les paiements sont des sous-objets des réservations.
-    // Pour supprimer un paiement, il faudrait identifier la réservation.
-    // On laisse syncManager gérer les queues séparées si on avait des tables séparées.
+export const deletePayment = async (id: string, reservationId?: string): Promise<void> => {
+    // 1. Si on a le reservationId, on nettoie d'abord l'objet local
+    if (reservationId) {
+        const res = await localDb.reservations.get(reservationId);
+        if (res && res.payments) {
+            const updatedPayments = res.payments.filter(p => p.id !== id);
+            await localDb.reservations.put({ ...res, payments: updatedPayments, _synced: false, _lastModified: Date.now() });
+            await syncManager.queueOperation({ action: 'update', table: 'reservations', entityId: reservationId, data: { ...res, payments: updatedPayments } });
+        }
+    }
+
+    // 2. Queue la suppression dans la table dédiée
+    await syncManager.queueOperation({ action: 'delete', table: 'payments', entityId: id, data: null });
 };
 
 export const deleteService = async (id: string, reservationId: string): Promise<void> => {
@@ -311,7 +387,12 @@ export const deleteService = async (id: string, reservationId: string): Promise<
             const newTotal = Math.max(0, Number(res.totalPrice) - (service.price * service.quantity));
             const updated = { ...res, services: newServices, totalPrice: newTotal };
             await localDb.reservations.put({ ...updated, _synced: false, _lastModified: Date.now() });
+
+            // Mise à jour du prix dans la réservation
             await syncManager.queueOperation({ action: 'update', table: 'reservations', entityId: reservationId, data: updated });
+
+            // Suppression réelle dans la table services
+            await syncManager.queueOperation({ action: 'delete', table: 'services', entityId: id, data: null });
         }
     }
 };
@@ -437,4 +518,22 @@ export const updateModuleTheme = async (path: string, colorKey: string): Promise
     await localDb.settings.put({ key: 'module_themes', value: themes });
     await syncManager.queueOperation({ action: 'update', table: 'settings', entityId: 'module_themes', data: themes });
     return themes;
+};
+
+export const fetchHotelSettings = async (): Promise<HotelSettings> => {
+    const s = await localDb.settings.get('hotel_info');
+    return s?.value || {
+        name: 'Hotel Manager Paris',
+        address: '12 Avenue des Champs Élysées, 75000 Paris',
+        email: 'contact@hotelmanager.io',
+        phone: '+33 1 23 45 67 89',
+        siret: '123 456 789 00012',
+        checkInTime: '15:00',
+        checkOutTime: '11:00'
+    };
+};
+
+export const updateHotelSettings = async (settings: HotelSettings): Promise<void> => {
+    await localDb.settings.put({ key: 'hotel_info', value: settings });
+    await syncManager.queueOperation({ action: 'update', table: 'settings', entityId: 'hotel_info', data: settings });
 };

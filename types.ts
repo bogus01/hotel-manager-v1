@@ -16,19 +16,20 @@ export enum RoomType {
 export type PricingModel = 'fixed' | 'flexible';
 
 export interface RoomCategory {
-    id: string;
-    name: string;
-    defaultCapacity: number;
-    defaultBaseRate: number;
-    pricingModel: PricingModel;
-    occupancyPrices: Record<number, number>; // Mapping guest count -> price
-    color?: string;
+  id: string;
+  name: string;
+  defaultCapacity: number;
+  defaultBaseRate: number;
+  pricingModel: PricingModel;
+  occupancyPrices: Record<number, number>; // Mapping guest count -> price
+  color?: string;
 }
 
 export interface Room {
   id: string;
   number: string;
   type: string;
+  categoryId?: string;
   floor: number;
   capacity: number;
   baseRate: number;
@@ -178,6 +179,18 @@ export interface ServiceCatalogItem {
   category: string;
 }
 
+export interface HotelSettings {
+  name: string;
+  address: string;
+  email: string;
+  phone: string;
+  siret: string;
+  checkInTime: string;
+  checkOutTime: string;
+  logo?: string;
+  invoiceFooter?: string;
+}
+
 export interface BoardConfiguration {
   [BoardType.BB]: number;
   [BoardType.HB]: number;
@@ -194,11 +207,11 @@ export interface StatCardProps {
 }
 
 export interface ModuleTheme {
-    path: string;
-    colorKey: string; // 'slate' | 'indigo' | 'emerald' | 'amber' | 'rose' | 'violet' | 'sky'
+  path: string;
+  colorKey: string; // 'slate' | 'indigo' | 'emerald' | 'amber' | 'rose' | 'violet' | 'sky'
 }
 
-export interface ModuleThemesMap extends Record<string, string> {}
+export interface ModuleThemesMap extends Record<string, string> { }
 
 export interface SyncMetadata {
   _synced: boolean;

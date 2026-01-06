@@ -30,6 +30,7 @@ export const mapRoomFromDB = (row: any): Room => ({
     id: row.id,
     number: row.number,
     type: row.type,
+    categoryId: row.category_id,
     floor: row.floor,
     capacity: row.capacity,
     baseRate: Number(row.base_rate),
@@ -41,6 +42,7 @@ export const mapRoomFromDB = (row: any): Room => ({
 export const mapRoomToDB = (room: Partial<Room>) => ({
     number: room.number,
     type: room.type,
+    category_id: room.categoryId,
     floor: room.floor,
     capacity: room.capacity,
     base_rate: room.baseRate,
@@ -115,12 +117,19 @@ export const mapReservationToDB = (res: Partial<Reservation>) => ({
     source: res.source,
     board_type: res.boardType,
     color: res.color,
-    adults: res.adults,
-    children: res.children,
-    base_rate: res.baseRate,
-    total_price: res.totalPrice,
-    deposit_amount: res.depositAmount,
+    adults: Number(res.adults) || 0,
+    children: Number(res.children) || 0,
+    base_rate: Number(res.baseRate) || 0,
+    total_price: Number(res.totalPrice) || 0,
+    deposit_amount: Number(res.depositAmount) || 0,
     notes: res.notes,
+    services: res.services,
+    payments: res.payments?.map(p => ({
+        id: p.id,
+        amount: Number(p.amount),
+        date: p.date instanceof Date ? p.date.toISOString() : p.date,
+        method: p.method
+    })) || []
 });
 
 // ============================================
@@ -236,3 +245,14 @@ export const parseSettingsValue = <T>(row: any, defaultValue: T): T => {
     if (!row) return defaultValue;
     return row.value as T;
 };
+
+export const mapSettingsToDB = (key: string, value: any) => ({
+    key: key,
+    value: value,
+    updated_at: new Date().toISOString(),
+});
+
+export const mapSettingsFromDB = (row: any) => ({
+    key: row.key,
+    value: row.value
+});
