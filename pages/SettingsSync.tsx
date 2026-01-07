@@ -4,6 +4,8 @@ import { syncManager } from '../services/syncManager';
 import { Wifi, WifiOff, RefreshCw, Database, Activity, Trash2, Globe, Server, CheckCircle, XCircle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
+import ConfirmModal from '../components/ConfirmModal';
+
 const SettingsSync: React.FC = () => {
     const navigate = useNavigate();
     const [isOnline, setIsOnline] = useState(syncManager.getStatus());
@@ -14,6 +16,8 @@ const SettingsSync: React.FC = () => {
     const [syncHistory, setSyncHistory] = useState<string[]>([
         `Page chargée à ${new Date().toLocaleTimeString()}`
     ]);
+    const [showConfirm, setShowConfirm] = useState(false);
+    const [showSuccess, setShowSuccess] = useState(false);
 
     useEffect(() => {
         const updateStatus = async () => {
@@ -43,21 +47,22 @@ const SettingsSync: React.FC = () => {
         setSyncHistory(prev => [`${new Date().toLocaleTimeString()} - ${msg}`, ...prev].slice(0, 50));
     };
 
-    const handleForceResync = async () => {
-        if (!window.confirm('Attention : Cette action va effacer toutes les données locales de votre appareil et les re-télécharger depuis le serveur principal.\n\nUtilisez cette option si vous constatez des incohérences (nombre de chambres incorrect, réservations manquantes).\n\nContinuer ?')) return;
+    const confirmResync = () => {
+        setShowConfirm(true);
+    };
 
+    const performResync = async () => {
         setIsSyncing(true);
         addLog('Démarrage de la resynchronisation forcée...');
         try {
             await syncManager.forceResync();
             addLog('Succès : Base de données locale reconstruite.');
-            alert('Synchronisation terminée avec succès. La page va se recharger.');
-            window.location.reload();
+            setShowSuccess(true);
         } catch (e) {
             const err = e instanceof Error ? e.message : 'Erreur inconnue';
             addLog(`ERREUR : ${err}`);
             setLastError(err);
-            alert('Erreur lors de la synchronisation. Vérifiez votre connexion.');
+            // On pourrait ajouter une modale d'erreur ici si besoin
         } finally {
             setIsSyncing(false);
         }
@@ -131,7 +136,7 @@ const SettingsSync: React.FC = () => {
                         </p>
 
                         <button
-                            onClick={handleForceResync}
+                            onClick={confirmResync}
                             disabled={isSyncing || !isOnline}
                             className={`w-full py-4 rounded-xl font-bold flex items-center justify-center space-x-3 transition-all
                         ${isSyncing || !isOnline
@@ -186,6 +191,31 @@ const SettingsSync: React.FC = () => {
                     </div>
 
                 </div>
+
+                <ConfirmModal
+                    isOpen={showConfirm}
+                    onClose={() => setShowConfirm(false)}
+                    onConfirm={performResync}
+                    title="Attention !"
+                    message={`Cette action va supprimer TOUTES les données locales et les re-télécharger depuis le serveur.\n\nUtilisez ceci uniquement si vous constatez des différences de données ou des bugs d'affichage.\n\nVos données serveur (Supabase) sont en sécurité.`}
+                    confirmText="Oui, Resynchroniser"
+                    type="danger"
+                />
+
+                <ConfirmModal
+                    isOpen={showSuccess}
+                    onClose={() => {
+                        setShowSuccess(false);
+                        window.location.reload();
+                    }}
+                    onConfirm={() => window.location.reload()}
+                    title="Terminé !"
+                    message="La base de données locale a été reconstruite avec succès. L'application va maintenant redémarrer pour appliquer les changements."
+                    confirmText="Redémarrer maintenant"
+                    cancelText="Fermer"
+                    type="success"
+                />
+
             </main>
         </div>
     );
