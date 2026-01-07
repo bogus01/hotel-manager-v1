@@ -5,6 +5,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Hotel Manager - PMS Pro</title>
     <link rel="stylesheet" href="/index.css">
+    <script>
+      // Force reload if an asset fails to load (likely due to a new build hash)
+      window.addEventListener('error', (e) => {
+        if (e.target.tagName === 'SCRIPT' && e.target.src.includes('/assets/')) {
+          console.warn('Asset 404 detected, potential cache mismatch. Reloading...');
+          window.location.reload();
+        }
+      }, true);
+    </script>
   </head>
   <body class="bg-gray-50 text-slate-900 antialiased">
     <div id="root"></div>

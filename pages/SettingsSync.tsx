@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import Header from '../components/Header';
 import { syncManager } from '../services/syncManager';
-import { Wifi, WifiOff, RefreshCw, Database, Activity, Trash2, Globe, Server, CheckCircle, XCircle } from 'lucide-react';
+import { Wifi, WifiOff, RefreshCw, Database, Activity, Trash2, Globe, Server, CheckCircle, XCircle, RotateCcw, AlertTriangle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import * as api from '../services/api';
 
 import ConfirmModal from '../components/ConfirmModal';
 
@@ -12,12 +13,15 @@ const SettingsSync: React.FC = () => {
     const [pendingCount, setPendingCount] = useState(0);
     const [projectUrl, setProjectUrl] = useState('');
     const [isSyncing, setIsSyncing] = useState(false);
+    const [isResetting, setIsResetting] = useState(false);
     const [lastError, setLastError] = useState<string | null>(null);
     const [syncHistory, setSyncHistory] = useState<string[]>([
         `Page chargée à ${new Date().toLocaleTimeString()}`
     ]);
     const [showConfirm, setShowConfirm] = useState(false);
     const [showSuccess, setShowSuccess] = useState(false);
+    const [showResetConfirm, setShowResetConfirm] = useState(false);
+    const [showResetSuccess, setShowResetSuccess] = useState(false);
 
     useEffect(() => {
         const updateStatus = async () => {
@@ -62,9 +66,25 @@ const SettingsSync: React.FC = () => {
             const err = e instanceof Error ? e.message : 'Erreur inconnue';
             addLog(`ERREUR : ${err}`);
             setLastError(err);
-            // On pourrait ajouter une modale d'erreur ici si besoin
         } finally {
             setIsSyncing(false);
+        }
+    };
+
+    const performReset = async () => {
+        setIsResetting(true);
+        addLog('Démarrage de la remise à zéro des données...');
+        try {
+            await api.resetPlanningData();
+            addLog('Succès : Planning réinitialisé (réservations, paiements, factures effacés).');
+            setShowResetConfirm(false);
+            setShowResetSuccess(true);
+        } catch (e) {
+            const err = e instanceof Error ? e.message : 'Erreur inconnue';
+            addLog(`ERREUR lors du Reset : ${err}`);
+            setLastError(err);
+        } finally {
+            setIsResetting(false);
         }
     };
 
@@ -164,6 +184,46 @@ const SettingsSync: React.FC = () => {
                         )}
                     </div>
 
+                    {/* Reset Data */}
+                    <div className="bg-slate-800 rounded-2xl p-6 border border-slate-700">
+                        <div className="flex items-center mb-4">
+                            <RotateCcw className="w-6 h-6 text-red-400 mr-3" />
+                            <h2 className="text-xl font-bold">Remise à zéro des données</h2>
+                        </div>
+                        <p className="text-slate-400 mb-6 text-sm">
+                            Cette action effacera TOUTES les réservations, paiements et factures du serveur.
+                            Les chambres et les clients seront conservés. <b>Action irréversible.</b>
+                        </p>
+
+                        <button
+                            onClick={() => setShowResetConfirm(true)}
+                            disabled={isResetting || !isOnline}
+                            className={`w-full py-4 rounded-xl font-bold flex items-center justify-center space-x-3 transition-all
+                        ${isResetting || !isOnline
+                                    ? 'bg-slate-700 text-slate-500 cursor-not-allowed'
+                                    : 'bg-red-600 hover:bg-red-500 text-white shadow-lg shadow-red-900/20'}`}
+                        >
+                            {isResetting ? (
+                                <>
+                                    <RefreshCw className="w-5 h-5 animate-spin" />
+                                    <span>Réinitialisation en cours...</span>
+                                </>
+                            ) : (
+                                <>
+                                    <RotateCcw className="w-5 h-5" />
+                                    <span>Remettre à zéro le Planning</span>
+                                </>
+                            )}
+                        </button>
+
+                        {!isOnline && (
+                            <p className="mt-3 text-red-400 text-xs text-center flex items-center justify-center">
+                                <WifiOff className="w-3 h-3 mr-1" />
+                                Connexion requise pour cette action
+                            </p>
+                        )}
+                    </div>
+
                     {/* Logs Console */}
                     <div className="bg-slate-950 rounded-2xl p-6 border border-slate-800 flex flex-col h-80">
                         <div className="flex items-center justify-between mb-4">
@@ -213,6 +273,29 @@ const SettingsSync: React.FC = () => {
                     message="La base de données locale a été reconstruite avec succès. L'application va maintenant redémarrer pour appliquer les changements."
                     confirmText="Redémarrer maintenant"
                     cancelText="Fermer"
+                    type="success"
+                />
+
+                <ConfirmModal
+                    isOpen={showResetConfirm}
+                    onClose={() => setShowResetConfirm(false)}
+                    onConfirm={performReset}
+                    title="Action Irréversible !"
+                    message={`Êtes-vous absolument sûr de vouloir supprimer TOUTES les données de réservation ?\n\nCette action effacera :\n- Toutes les réservations\n- Tous les paiements\n- Toutes les factures\n\nLes chambres et les fiches clients resteront intactes.`}
+                    confirmText="Oui, TOUT supprimer"
+                    type="danger"
+                />
+
+                <ConfirmModal
+                    isOpen={showResetSuccess}
+                    onClose={() => {
+                        setShowResetSuccess(false);
+                        window.location.reload();
+                    }}
+                    onConfirm={() => window.location.reload()}
+                    title="Remise à zéro effectuée"
+                    message="Toutes les données de planning ont été effacées avec succès. L'application va redémarrer."
+                    confirmText="OK"
                     type="success"
                 />
 
