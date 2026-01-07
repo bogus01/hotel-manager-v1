@@ -8,6 +8,7 @@ import {
     CurrencySettings, BoardConfiguration, PlanningSettings, ModuleThemesMap,
     BoardType, RoomStatus, HotelSettings
 } from '../types';
+export { forceResyncWithReload } from './hybridApiSync';
 
 // Helper pour générer des IDs robustes
 const generateId = (): string => {
