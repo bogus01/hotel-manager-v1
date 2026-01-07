@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import {
-  Hotel, BedDouble, Users, Settings as SettingsIcon, CreditCard, Coffee, CalendarDays, Palette, Scale
+  Hotel, BedDouble, Users, Settings as SettingsIcon, CreditCard, Coffee, CalendarDays, Palette, Scale, RefreshCw
 } from 'lucide-react';
 import Header from '../components/Header';
 import ModuleButton from '../components/ModuleButton';
@@ -58,6 +58,7 @@ const Settings: React.FC = () => {
             <ModuleButton to="/settings/taxes" icon={<Scale />} label="Taxes & TVA" description="Fiscalité et taxes de séjour." color={getModuleColor('/settings/taxes')} />
             <ModuleButton to="/settings/modules-colors" icon={<Palette />} label="Thématisation" description="Couleurs des panneaux menu." color={getModuleColor('/settings/modules-colors')} />
             <ModuleButton to="/settings/users" icon={<Users />} label="Utilisateurs" description="Accès sécurisés du personnel." color={getModuleColor('/settings/users')} />
+            <ModuleButton to="/settings/sync" icon={<RefreshCw />} label="Synchronisation" description="État réseau & Debug." color={getModuleColor('/settings/sync')} />
           </div>
         </div>
       </main>

@@ -18,6 +18,7 @@ import SettingsPayments from './pages/SettingsPayments';
 import SettingsTaxes from './pages/SettingsTaxes';
 import SettingsPlanning from './pages/SettingsPlanning';
 import SettingsModulesColors from './pages/SettingsModulesColors';
+import SettingsSync from './pages/SettingsSync';
 import Reports from './pages/Reports';
 import ReportsDailyCash from './pages/ReportsDailyCash';
 import ReportsSalesJournal from './pages/ReportsSalesJournal';
@@ -67,6 +68,7 @@ const App: React.FC = () => {
           <Route path="/settings/taxes" element={<SettingsTaxes />} />
           <Route path="/settings/planning" element={<SettingsPlanning />} />
           <Route path="/settings/modules-colors" element={<SettingsModulesColors />} />
+          <Route path="/settings/sync" element={<SettingsSync />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </HashRouter>

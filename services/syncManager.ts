@@ -369,6 +369,53 @@ class SyncManager {
     public async getPendingCount(): Promise<number> {
         return await localDb.syncQueue.count();
     }
+
+    public getProjectUrl(): string {
+        return import.meta.env.VITE_SUPABASE_URL || 'Unknown';
+    }
+
+    public async forceResync() {
+        console.log('[SyncManager] Forcing full resync...');
+        if (this.syncInProgress) {
+            console.warn('[SyncManager] Sync already in progress, waiting...');
+            // On pourrait attendre ou forcer, ici on retourne pour éviter les conflits
+            return;
+        }
+
+        this.syncInProgress = true;
+
+        try {
+            // 1. Clear all local tables
+            await Promise.all([
+                localDb.rooms.clear(),
+                localDb.roomCategories.clear(),
+                localDb.clients.clear(),
+                localDb.reservations.clear(),
+                localDb.taxes.clear(),
+                localDb.paymentMethods.clear(),
+                localDb.serviceCatalog.clear(),
+                localDb.users.clear(),
+                localDb.settings.clear(),
+                localDb.syncQueue.clear()
+            ]);
+            console.log('[SyncManager] Local database cleared');
+
+            // 2. Fetch everything
+            await this.pullChanges();
+            console.log('[SyncManager] Full resync completed');
+
+            // 3. Notifier les listeners pour rafraîchir l'UI
+            this.listeners.forEach(l => l(this.isOnline));
+
+            // Reload page might be needed to refresh all hooks, but let's try just pulling first
+            // window.location.reload(); 
+        } catch (error) {
+            console.error('[SyncManager] Force resync failed:', error);
+            this.lastError = error instanceof Error ? error.message : 'Force resync failed';
+        } finally {
+            this.syncInProgress = false;
+        }
+    }
 }
 
 export const syncManager = new SyncManager();
